@@ -51,7 +51,7 @@ svg.i { width: 1.1em; height: 1.1em; vertical-align: -0.18em; flex: none; stroke
 .mast-brand { text-align: center; padding: 6px 16px 14px; }
 .brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); }
 .brand:hover { color: var(--text); }
-.wordmark { font-family: var(--serif); font-size: clamp(2.6rem, 6.5vw, 4.4rem); font-weight: 600; letter-spacing: -.035em; line-height: 1; font-variation-settings: "opsz" 144; }
+.wordmark { font-family: "Fraunces", Georgia, serif; font-size: clamp(2.6rem, 6.5vw, 4.4rem); font-weight: 600; letter-spacing: -.035em; line-height: 1; font-variation-settings: "opsz" 144; }
 .tagline { font-family: var(--serif); font-style: italic; font-size: 1.05rem; color: var(--text-2); margin: 6px 0 0; }
 .dateline { font-size: .78rem; letter-spacing: .04em; color: var(--muted); margin: 6px 0 0; min-height: 1.2em; }
 .spectrum { display: grid; grid-template-columns: repeat(6, 1fr); height: 4px; }
@@ -216,6 +216,26 @@ a.chip:hover { border-color: var(--text); }
 .recall b { font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
 .recall p { margin: 0; }
 time { white-space: nowrap; }
+:root[data-font="classique"] { --serif: Georgia, "Times New Roman", serif; --sans: Georgia, "Times New Roman", serif; }
+:root[data-font="moderne"] { --serif: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; --sans: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; }
+:root[data-font="lisible"] { --serif: Verdana, Tahoma, Arial, sans-serif; --sans: Verdana, Tahoma, Arial, sans-serif; }
+:root[data-font="lisible"] body { letter-spacing: .015em; word-spacing: .06em; line-height: 1.7; }
+.text-btn { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 1.05rem; }
+.font-choice { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 11px 14px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; text-align: left; }
+.font-choice:hover { border-color: var(--text); }
+.font-choice.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.font-choice b { font-size: 1.15rem; font-weight: 600; }
+.sample-prisme { font-family: "Fraunces", Georgia, serif; }
+.sample-classique { font-family: Georgia, "Times New Roman", serif; }
+.sample-moderne { font-family: "Segoe UI", system-ui, Roboto, Arial, sans-serif; }
+.sample-lisible { font-family: Verdana, Tahoma, Arial, sans-serif; letter-spacing: .015em; }
+.search-big { display: flex; gap: 8px; }
+.search-big .input { flex: 1; min-width: 0; padding: 12px 14px; font-size: 1.05rem; }
+.periods { border: 0; padding: 0; margin: 10px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.periods label { cursor: pointer; }
+.periods label:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.more-filters { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+.more-filters summary { cursor: pointer; font-weight: 600; font-size: .92rem; }
 .linklike { background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; color: var(--text-2); }
 .linklike:hover { color: var(--accent); }
 .card-body { display: flex; flex-direction: column; gap: 6px; flex: 1; }
@@ -367,7 +387,8 @@ table.t tr:last-child td { border-bottom: 0; }
   .mast-top { gap: 6px; padding: 8px 12px; }
   .icon-btn { width: 38px; height: 38px; }
   .search input { padding-left: 30px; }
-  .search input::placeholder { color: transparent; }
+  .search-big { flex-direction: column; }
+  .search-big .btn { justify-content: center; }
 }
 
 /* Mode lecture épuré */

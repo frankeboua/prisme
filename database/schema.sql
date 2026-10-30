@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     role             TEXT    NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin')),
     persona          TEXT,                       -- profil de référence (cahier des charges)
     font_scale       REAL    NOT NULL DEFAULT 1.0,
+    font_family      TEXT    NOT NULL DEFAULT 'prisme',
     high_contrast    INTEGER NOT NULL DEFAULT 0,
     theme            TEXT    NOT NULL DEFAULT 'auto' CHECK (theme IN ('auto','light','dark')),
     simple_mode      INTEGER NOT NULL DEFAULT 0, -- grands boutons, navigation simplifiée

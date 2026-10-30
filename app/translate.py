@@ -1,10 +1,25 @@
 """Traduction automatique (API MyMemory, gratuite) avec cache en base de données."""
+import html
 import json
 import re
 import urllib.parse
 import urllib.request
 
 from . import db, nlp
+
+
+# Langues testées une par une auprès du service. Le bambara, le dioula et le kinyarwanda sont exclus :
+# leurs traductions d'essai étaient fausses. Le baoulé est refusé par le service.
+LANGUAGES = {
+    "fr": "Français", "en": "Anglais", "es": "Espagnol", "pt": "Portugais", "ar": "Arabe", "de": "Allemand", "it": "Italien", "nl": "Néerlandais",
+    "ru": "Russe", "zh": "Chinois", "ja": "Japonais", "ko": "Coréen", "hi": "Hindi", "bn": "Bengali", "ur": "Ourdou", "fa": "Persan", "tr": "Turc",
+    "id": "Indonésien", "ms": "Malais", "vi": "Vietnamien", "th": "Thaï", "tl": "Tagalog", "pl": "Polonais", "uk": "Ukrainien", "ro": "Roumain",
+    "el": "Grec", "sv": "Suédois", "da": "Danois", "no": "Norvégien", "fi": "Finnois", "cs": "Tchèque", "hu": "Hongrois", "he": "Hébreu",
+    "sw": "Swahili", "ha": "Haoussa", "yo": "Yoruba", "ig": "Igbo", "am": "Amharique", "wo": "Wolof", "ff": "Peul", "ln": "Lingala",
+    "mg": "Malgache", "so": "Somali", "zu": "Zoulou", "xh": "Xhosa", "af": "Afrikaans",
+}
+RTL = {"ar", "fa", "he", "ur"}
+UNEVEN = {"sw", "ha", "yo", "ig", "am", "wo", "ff", "ln", "mg", "so", "zu", "xh"}
 
 
 def _chunks(text, size=450):
@@ -26,7 +41,7 @@ def _call(text, src, dst):
     out = data.get("responseData", {}).get("translatedText") or ""
     if "MYMEMORY WARNING" in out.upper() or not out:
         raise RuntimeError("quota de traduction atteint")
-    return out
+    return html.unescape(out)
 
 
 def translate_article(conn, art, dst):
@@ -40,8 +55,10 @@ def translate_article(conn, art, dst):
     try:
         title = _call(art["title"], src, dst)
         parts = [_call(c, src, dst) for c in _chunks(body)]
-    except Exception as e:
-        return {"error": f"Traduction indisponible (connexion Internet requise) : {e}"}
+    except RuntimeError:
+        return {"error": "Le service de traduction gratuit a atteint sa limite du jour. Réessayez demain ou lisez l'article original."}
+    except Exception:
+        return {"error": "Le service de traduction ne répond pas pour le moment. Réessayez dans quelques minutes."}
     res = {"title": title, "body": re.sub(r"\s+", " ", " ".join(parts)), "engine": "MyMemory (traduction automatique)"}
     with db._lock:
         conn.execute("INSERT OR REPLACE INTO translations(article_id, lang, title, body, engine) VALUES (?,?,?,?,?)",

@@ -90,7 +90,7 @@ def http_url(value):
 
 def public_user(u):
     return {k: u[k] for k in ("id", "username", "email", "display_name", "role", "persona", "font_scale", "high_contrast",
-                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "email_verified", "country", "created_at")} if u else None
+                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "email_verified", "country", "font_family", "created_at")} if u else None
 
 
 # =====================================================================
@@ -280,7 +280,7 @@ def me(req, q, user):
 @db.write
 def update_me(req, body, user):
     fields = {"display_name": str, "email": str, "font_scale": float, "high_contrast": int, "theme": str,
-              "simple_mode": int, "preferred_lang": str, "diversity_ratio": float, "country": str}
+              "simple_mode": int, "preferred_lang": str, "diversity_ratio": float, "country": str, "font_family": str}
     sets, vals = [], []
     for k, cast in fields.items():
         if k in body:
@@ -290,6 +290,8 @@ def update_me(req, body, user):
             if k == "diversity_ratio":
                 v = min(max(v, 0.0), 0.5)
             if k == "theme" and v not in ("auto", "light", "dark"):
+                continue
+            if k == "font_family" and v not in ("prisme", "classique", "moderne", "lisible"):
                 continue
             sets.append(f"{k}=?"); vals.append(v)
     if "country" in body and body["country"] not in COUNTRIES:
@@ -396,6 +398,11 @@ def feed(req, q, user):
                        int(qv(q, "limit", 24)), int(qv(q, "offset", 0)))
 
 
+@route("GET", "/api/languages")
+def languages(req, q, user):
+    return {"languages": translate.LANGUAGES, "rtl": sorted(translate.RTL), "uneven": sorted(translate.UNEVEN)}
+
+
 @route("GET", "/api/countries")
 def countries(req, q, user):
     return COUNTRIES
@@ -406,14 +413,21 @@ def recall(req, q, user):
     return {"recall": editorial.recall_for(qv(q, "category"))}
 
 
+SYNONYMS = {"barca": ("barca", "barcelone", "barcelona")}
+SEARCH_COLUMNS = "norm(a.title || ' ' || COALESCE(a.summary, '') || ' ' || COALESCE(a.author, '') || ' ' || s.name || ' ' || COALESCE(c.name, ''))"
+SEARCH_STOP = {db.normalize(w) for w in nlp.STOPWORDS}
+
+
+def search_terms(text):
+    """Les mots utiles de la recherche, sans les petits mots (« les », « du »), les accents ni le pluriel."""
+    words = re.findall(r"[a-z0-9]+", db.normalize(text))
+    useful = [w for w in words if w not in SEARCH_STOP and (len(w) > 1 or w.isdigit())] or words
+    return [w[:-1] if len(w) > 4 and w.endswith("s") else w for w in useful][:6]
+
+
 @route("GET", "/api/search")
 def search(req, q, user):
     where, params = ["1=1"], []
-    text = qv(q, "q")
-    if text:
-        for term in text.split()[:6]:
-            where.append("(a.title LIKE ? OR a.summary LIKE ? OR a.content LIKE ? OR a.author LIKE ?)")
-            params += [f"%{term}%"] * 4
     for key, col in (("source", "a.source_id"), ("category", "c.slug"), ("media", "a.media_type"),
                      ("status", "a.verification_status"), ("lang", "a.language")):
         v = qv(q, key)
@@ -422,19 +436,40 @@ def search(req, q, user):
     if qv(q, "source") and not str(qv(q, "source")).isdigit():
         raise ApiError(400, "Source invalide.")
     if qv(q, "author"):
-        where.append("a.author LIKE ?"); params.append(f"%{qv(q, 'author')}%")
+        where.append("norm(a.author) LIKE ?"); params.append(f"%{db.normalize(qv(q, 'author'))}%")
     if qv(q, "from"):
         where.append("date(a.published_at)>=date(?)"); params.append(qv(q, "from"))
     if qv(q, "to"):
         where.append("date(a.published_at)<=date(?)"); params.append(qv(q, "to"))
-    if qv(q, "dedup") == "1":
-        where.append("a.is_cluster_lead=1")
+    sort = qv(q, "sort", "pertinence")
     order = {"date": "a.published_at DESC", "ancien": "a.published_at ASC", "fiabilite": "s.reliability DESC, a.published_at DESC",
-             "verification": "COALESCE(cl.source_count, 1) DESC, a.published_at DESC"}.get(qv(q, "sort", "date"), "a.published_at DESC")
-    sql = engine.FEED_SQL.replace("WHERE s.active=1", "WHERE 1=1").format(where=" AND " + " AND ".join(where)) + f" ORDER BY {order} LIMIT 200"
-    items = db.rows(CONN, sql, params)
+             "verification": "COALESCE(cl.source_count, 1) DESC, a.published_at DESC"}.get(sort, "a.published_at DESC")
+    base = engine.FEED_SQL.replace("WHERE s.active=1", "WHERE 1=1")
+
+    def run(terms, joiner):
+        clauses, values = [], []
+        for t in terms:
+            alts = SYNONYMS.get(t, (t,))
+            clauses.append("(" + " OR ".join(f"{SEARCH_COLUMNS} LIKE ?" for _ in alts) + ")")
+            values += [f"%{x}%" for x in alts]
+        extra = [f"({joiner.join(clauses)})"] if clauses else []
+        return db.rows(CONN, base.format(where=" AND " + " AND ".join(where + extra)) + f" ORDER BY {order} LIMIT 600", params + values)
+
+    terms = search_terms(qv(q, "q", ""))
+    items, relaxed = run(terms, " AND "), False
+    if not items and len(terms) > 1:      # aucun article ne contient tous les mots : on propose ceux qui en contiennent au moins un
+        items, relaxed = run(terms, " OR "), True
+    if terms and sort == "pertinence":    # les mots trouvés dans le titre passent d'abord, puis les plus récents
+        def title_hits(a):
+            title = db.normalize(a["title"])
+            return sum(any(x in title for x in SYNONYMS.get(t, (t,))) for t in terms)
+        items.sort(key=lambda a: (title_hits(a), a["published_at"] or ""), reverse=True)
+    if qv(q, "dedup") == "1":             # une entrée par sujet : l'article qui répond le mieux, même s'il n'est pas à la une du sujet
+        seen = set()
+        items = [a for a in items if not a["cluster_id"] or not (a["cluster_id"] in seen or seen.add(a["cluster_id"]))]
+    items = items[:200]
     now = db.now()
-    return {"total": len(items), "items": [engine.decorate(CONN, a, now) for a in items]}
+    return {"total": len(items), "items": [engine.decorate(CONN, a, now) for a in items], "terms": terms, "relaxed": relaxed}
 
 
 def _article(aid):
@@ -490,7 +525,7 @@ def reverify(req, body, user, aid):
 def translate_article(req, q, user, aid):
     a = _article(aid)
     dst = qv(q, "lang", "fr" if a["language"] != "fr" else "en")
-    if dst not in ("fr", "en", "es", "de", "ar", "pt"):
+    if dst not in translate.LANGUAGES:
         raise ApiError(400, "Langue non prise en charge.")
     if not db.row(CONN, "SELECT 1 FROM translations WHERE article_id=? AND lang=?", (a["id"], dst)):
         limit("translate", req.ip, 30, 60)   # le service externe de traduction a un quota
@@ -879,7 +914,7 @@ if PUBLIC:
 TEXT_TYPES = ("text/", "application/javascript", "application/json", "application/xml", "image/svg")
 _template = None
 # Réponses identiques pour tous les visiteurs non connectés : calculées une seule fois par période.
-ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources", "/api/countries"}
+ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources", "/api/countries", "/api/languages"}
 ANON_TTL = 300    # vidé à chaque collecte
 _anon_cache = {}
 
@@ -1122,6 +1157,13 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v3'"):
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                            VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v3', '1')")
     if PUBLIC:
         seed.ensure_admin(CONN, os.environ.get("PRISME_ADMIN_USER"), os.environ.get("PRISME_ADMIN_PASSWORD"))
     else:

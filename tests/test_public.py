@@ -2,6 +2,7 @@
 import io
 import re
 import unittest
+import urllib.parse
 from datetime import date
 
 from PIL import Image
@@ -10,7 +11,7 @@ from tests.helpers import call, setup
 
 setup("public")
 import server  # noqa: E402
-from app import db, editorial, engine, mail, nlp, rss  # noqa: E402
+from app import db, editorial, engine, mail, nlp, rss, translate  # noqa: E402
 
 server.bootstrap()
 CONN = server.CONN
@@ -237,6 +238,94 @@ class Inputs(Case):
             self.assertNotIn('"""PRISME', str(body))
 
 
+class SearchHelp(Case):
+    def found(self, q):
+        return [a["id"] for a in call(server, "GET", "/api/search?q=" + urllib.parse.quote(q))[2]["items"]]
+
+    def test_accents_case_and_apostrophes_do_not_matter(self):
+        aid = add_article(src[0], "ci1", "Côte d’Ivoire : la récolte de cacao démarre à Daloa", "Les planteurs de Daloa préparent la récolte.")
+        for q in ("cote d'ivoire", "COTE IVOIRE", "Côte d’Ivoire", "recolte cacao", "cacao"):
+            self.assertIn(aid, self.found(q), q)
+
+    def test_small_words_are_ignored(self):
+        aid = add_article(src[0], "ci2", "Les défaites du Barça en Ligue des champions", "Le club catalan a perdu.")
+        self.assertIn(aid, self.found("les défaites du barça"))
+        self.assertIn(aid, self.found("defaite barca"))
+
+    def test_nickname_finds_full_name(self):
+        aid = add_article(src[0], "ci3", "Le FC Barcelone prépare son prochain match", "Entraînement ce matin.")
+        self.assertIn(aid, self.found("barça"))
+
+    def test_partial_match_is_flagged(self):
+        aid = add_article(src[0], "ci4", "Le festival de jazz de Grand-Bassam ouvre ses portes", "Concert ce soir.")
+        res = call(server, "GET", "/api/search?q=" + urllib.parse.quote("jazz xylophonique"))[2]
+        self.assertTrue(res["relaxed"])
+        self.assertIn(aid, [a["id"] for a in res["items"]])
+        self.assertFalse(call(server, "GET", "/api/search?q=jazz")[2]["relaxed"])
+
+    def test_title_matches_come_first(self):
+        body = add_article(src[0], "ci5", "Conseil des ministres de la semaine", "Le texte évoque aussi le zébu malgache.", 1)
+        title = add_article(src[1], "ci6", "Le zébu malgache à l'honneur", "Une race bovine.", 5)
+        self.assertEqual(self.found("zebu")[:2], [title, body])
+
+    def test_grouped_search_keeps_article_matching_the_words(self):
+        lead = add_article(src[0], "dup1", "Sénégal : un pont géant inauguré à Kaolack cette semaine", "Le pont géant de Kaolack est ouvert.", 1)
+        echo = add_article(src[1], "dup2", "Kaolack : le pont géant inauguré au Sénégal, un chantier titanesque", "Le pont géant de Kaolack est ouvert.", 2)
+        engine.recluster(CONN)
+        same = db.scalar(CONN, "SELECT cluster_id FROM articles WHERE id=?", (lead,)) == db.scalar(CONN, "SELECT cluster_id FROM articles WHERE id=?", (echo,))
+        self.assertTrue(same)
+        res = call(server, "GET", "/api/search?q=titanesque&dedup=1")[2]
+        self.assertIn(echo, [a["id"] for a in res["items"]])
+        both = [a["id"] for a in call(server, "GET", "/api/search?q=kaolack&dedup=1")[2]["items"]]
+        self.assertEqual(len([i for i in both if i in (lead, echo)]), 1)
+
+    def test_search_stays_safe(self):
+        self.assertEqual(call(server, "GET", "/api/search?q=" + urllib.parse.quote("%' OR 1=1--"))[0], 200)
+        self.assertEqual(call(server, "GET", "/api/search?q=" + urllib.parse.quote("_ %"))[0], 200)
+
+
+class Translation(Case):
+    def test_many_languages_and_bad_ones_refused(self):
+        res = call(server, "GET", "/api/languages")[2]
+        self.assertGreaterEqual(len(res["languages"]), 45)
+        for code in ("sw", "ha", "ar", "zh", "wo"):
+            self.assertIn(code, res["languages"])
+        for code in ("bm", "dyu", "rw"):
+            self.assertNotIn(code, res["languages"])
+        self.assertEqual(call(server, "GET", f"/api/articles/{A1}/translate?lang=xx")[0], 400)
+
+    def test_translation_uses_requested_language(self):
+        seen = []
+        original = translate._call
+        translate._call = lambda text, s, d: (seen.append(d), "Kiswahili &amp; tafsiri")[1]
+        try:
+            res = call(server, "GET", f"/api/articles/{A1}/translate?lang=sw")[2]
+        finally:
+            translate._call = original
+        self.assertEqual(set(seen), {"sw"})
+        self.assertEqual(res["title"], "Kiswahili &amp; tafsiri")
+
+    def test_quota_message_is_understandable(self):
+        original = translate._call
+
+        def full(*a):
+            raise RuntimeError("quota")
+        translate._call = full
+        try:
+            res = call(server, "GET", f"/api/articles/{A2}/translate?lang=de")[2]
+        finally:
+            translate._call = original
+        self.assertIn("limite", res["error"])
+
+
+class TextSettings(Case):
+    def test_font_is_saved_and_invalid_is_ignored(self):
+        t = new_user("policelecteur")
+        self.assertEqual(call(server, "GET", "/api/me", token=t)[2]["user"]["font_family"], "prisme")
+        self.assertEqual(call(server, "PUT", "/api/me", {"font_family": "lisible"}, t)[2]["user"]["font_family"], "lisible")
+        self.assertEqual(call(server, "PUT", "/api/me", {"font_family": "<script>"}, t)[2]["user"]["font_family"], "lisible")
+
+
 class Publishers(Case):
     def test_two_feeds_of_one_publisher_count_as_one_media(self):
         ids = {r["name"]: r["id"] for r in db.rows(CONN, "SELECT id, name FROM sources")}
@@ -259,8 +348,10 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 13)
-        self.assertEqual(st["real_sources"], 11)
+        self.assertEqual(feeds, 16)
+        self.assertEqual(st["real_sources"], 14)
+        ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
+        self.assertEqual(ivoirians, 3)
 
 
 class Video(Case):

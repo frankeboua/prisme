@@ -152,7 +152,7 @@ function navItems() {
   return [
     ["Lire"],
     ["/", "home", "À la une"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
-    ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Recherche avancée"],
+    ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Rechercher"],
     ["Mon espace"],
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
     ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
@@ -173,10 +173,24 @@ function renderNav() {
     : `<a class="btn" href="/connexion">${ico("user")}<span class="nm">Se connecter</span></a>`;
 }
 
+const FONTS = [["prisme", "Prisme", "Le style du site"], ["classique", "Classique", "Comme un journal imprimé"], ["moderne", "Moderne", "Simple et net"], ["lisible", "Très lisible", "Lettres larges et espacées"]];
+async function savePrefs(partial) {
+  if (S.user) { const r = await put("/api/me", partial); S.user = r.user; }
+  else store.set("prisme_prefs", { ...store.get("prisme_prefs", { font_scale: 1, high_contrast: 0, theme: "auto", simple_mode: 0 }), ...partial });
+  applyPrefs();
+}
+function openTextSettings() {
+  const p = S.user || store.get("prisme_prefs", { font_scale: 1 });
+  const cur = p.font_family || "prisme";
+  modal(`<div class="row between"><h2 style="margin:0">Police et taille du texte</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+    <div class="stack" style="margin-top:14px" role="group" aria-label="Police">${FONTS.map(([k, n, d]) => `<button class="font-choice ${cur === k ? "on" : ""}" data-act="setfont" data-font="${k}" aria-pressed="${cur === k}"><b class="sample-${k}">${n}</b><span class="small muted">${d}</span></button>`).join("")}</div>
+    <hr class="sep"><div class="row between"><b>Taille du texte</b><div class="row"><button class="btn sm" data-act="fontsize" data-d="-0.05" aria-label="Réduire le texte">A−</button><span id="fsNow" class="small">${Math.round((p.font_scale || 1) * 100)} %</span><button class="btn sm" data-act="fontsize" data-d="0.05" aria-label="Agrandir le texte">A+</button></div></div>`);
+}
 function applyPrefs() {
   const p = S.user || store.get("prisme_prefs", { font_scale: 1, high_contrast: 0, theme: "auto", simple_mode: 0 });
   const r = document.documentElement;
   r.style.setProperty("--fs", p.font_scale || 1);
+  if (p.font_family && p.font_family !== "prisme") r.dataset.font = p.font_family; else delete r.dataset.font;
   if (p.theme && p.theme !== "auto") r.dataset.theme = p.theme; else delete r.dataset.theme;
   if (p.high_contrast) r.dataset.contrast = "high"; else delete r.dataset.contrast;
   document.body.classList.toggle("simple", !!p.simple_mode);
@@ -299,7 +313,7 @@ async function loadHomeExtras() {
       <div class="topics">${multi.map((c) => `<article class="topic"><div class="row" style="justify-content:space-between"><span class="kicker">${esc(c.category_name || "Actualité")}</span>${spectre(c.source_count)}</div>
         <h3><a href="/sujet/${c.id}">${esc(c.title)}</a></h3><div class="byline">${when(c.last_published)}</div><a class="go" href="/sujet/${c.id}">Comparer les ${c.size} articles</a></article>`).join("")}</div>`;
   }
-  $("#rail").innerHTML = `<div class="panel"><h3>Les mots du moment</h3><ol class="rank">${t.keywords.slice(0, 8).map((k) => `<li><a href="/recherche?q=${encodeURIComponent(k.word)}&dedup=1">${esc(k.word)}</a></li>`).join("")}</ol></div>
+  $("#rail").innerHTML = `<div class="panel"><h3>Les mots du moment</h3><ol class="rank">${t.keywords.slice(0, 8).map((k) => `<li><a href="/recherche?q=${encodeURIComponent(k.word)}">${esc(k.word)}</a></li>`).join("")}</ol></div>
     <div class="panel"><h3>Le digest du jour</h3><p class="small muted">L'essentiel en quelques minutes, à partir de plusieurs sources citées.</p><a class="btn sm" href="/digest">${ico("digest")} Lire le digest</a></div>
     <div class="panel"><h3>Comment lire Prisme</h3><p class="small muted">Le spectre indique combien de médias couvrent un même événement. C'est une mesure de couverture, pas une preuve de véracité.</p><a class="small" href="/methode">Notre méthode</a></div>`;
 }
@@ -419,14 +433,19 @@ async function tool(name) {
       renderClaims(box, a.claims, a);
     } else if (name === "translate") {
       const dst = a.language === "fr" ? "en" : "fr";
-      box.innerHTML = `<div class="row" style="margin-bottom:12px"><span class="small muted">Langue d'origine : <b>${a.language.toUpperCase()}</b></span>
-        <select class="input" id="trLang" style="width:auto">${[["fr", "Français"], ["en", "Anglais"], ["es", "Espagnol"], ["de", "Allemand"], ["ar", "Arabe"], ["pt", "Portugais"]].filter(([k]) => k !== a.language).map(([k, l]) => `<option value="${k}" ${k === dst ? "selected" : ""}>${l}</option>`).join("")}</select>
-        <button class="btn primary sm" id="trGo">${ico("globe")} Traduire</button></div><div id="trOut"></div>`;
+      const langs = await get("/api/languages");
+      box.innerHTML = `<div class="row" style="margin-bottom:12px"><span class="small muted">Langue d'origine : <b>${esc(langs.languages[a.language] || a.language.toUpperCase())}</b></span>
+        <label class="sr" for="trLang">Traduire en</label>
+        <select class="input" id="trLang" style="width:auto">${Object.entries(langs.languages).filter(([k]) => k !== a.language).sort((x, y) => x[1].localeCompare(y[1], "fr")).map(([k, l]) => `<option value="${k}" ${k === dst ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <button class="btn primary sm" id="trGo">${ico("globe")} Traduire</button></div>
+        <p class="small muted" style="margin-top:0">${Object.keys(langs.languages).length} langues disponibles. Pas encore de traduction fiable pour le baoulé ni le dioula.</p><div id="trOut"></div>`;
       const go = async () => {
+        const code = $("#trLang").value;
         $("#trOut").innerHTML = `<div class="muted">Traduction en cours…</div>`;
-        const t = await get(`/api/articles/${a.id}/translate?lang=${$("#trLang").value}`);
-        $("#trOut").innerHTML = t.error ? `<div class="alert-line warn">${ico("alert")}${esc(t.error)}</div>` :
-          `<h3>${esc(t.title)}</h3><p>${esc(t.body)}</p><div class="small muted">${ico("info")} Moteur : ${esc(t.engine)}${t.cached ? " (en cache)" : ""}. Traduction automatique : en cas de doute, référez-vous au texte original.</div>`;
+        const t = await get(`/api/articles/${a.id}/translate?lang=${code}`);
+        const dir = langs.rtl.includes(code) ? "rtl" : "ltr";
+        $("#trOut").innerHTML = t.error ? `<div class="alert-line warn">${ico("alert")}<span>${esc(t.error)}</span></div>` :
+          `<h3 lang="${code}" dir="${dir}">${esc(t.title)}</h3><p lang="${code}" dir="${dir}">${esc(t.body)}</p><div class="small muted">${ico("info")} Moteur : ${esc(t.engine)}${t.cached ? " (en cache)" : ""}. Traduction automatique${langs.uneven.includes(code) ? " de qualité variable pour cette langue" : ""} : en cas de doute, référez-vous au texte original.</div>`;
       };
       $("#trGo").onclick = go;
       if (a.language !== "fr") go();
@@ -495,38 +514,72 @@ async function pageCompare(cid) {
     <div class="panel" style="margin-top:18px"><h3>${ico("clock")} Chronologie de publication</h3><div class="timeline">${c.articles.map((a) => `<div class="tl-item"><b>${fmtDate(a.published_at)}</b> — ${esc(a.source)} : <a href="/article/${a.id}">${esc(a.title)}</a></div>`).join("")}</div></div>`;
 }
 
+const SEARCH_EXAMPLES = ["Côte d'Ivoire", "Barça", "élections", "cacao", "Afrique", "santé"];
+const dayOffset = (n) => { const d = new Date(Date.now() - n * 86400000); return d.toISOString().slice(0, 10); };
 async function pageSearch(params) {
   const p = new URLSearchParams(params || "");
   const srcs = await get("/api/sources");
+  const q = p.get("q") || "";
+  const periods = [["", "Toutes les dates"], ["1", "Aujourd'hui"], ["7", "7 derniers jours"], ["30", "30 derniers jours"]];
+  const advanced = ["category", "source", "media", "status", "lang", "author", "from", "to", "all"].some((k) => p.get(k)) && !p.get("periode") || ["category", "source", "media", "status", "lang", "author", "all"].some((k) => p.get(k));
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("search")} Recherche avancée</h1><p class="lead">Par mots-clés, date, auteur, média, format ou niveau de couverture.</p></div></div>
-    <form class="panel" id="searchForm">
-      <div class="grid g4">
-        <label class="f" style="grid-column:span 2"><span>Mots-clés</span><input class="input" name="q" value="${esc(p.get("q") || "")}" placeholder="ex. carburant, Union africaine…"></label>
-        <label class="f"><span>Auteur</span><input class="input" name="author" value="${esc(p.get("author") || "")}"></label>
-        <label class="f"><span>Source</span><select class="input" name="source"><option value="">Toutes</option>${srcs.map((s) => `<option value="${s.id}" ${p.get("source") == s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>
-        <label class="f"><span>Du</span><input class="input" type="date" name="from" value="${esc(p.get("from") || "")}"></label>
-        <label class="f"><span>Au</span><input class="input" type="date" name="to" value="${esc(p.get("to") || "")}"></label>
-        <label class="f"><span>Rubrique</span><select class="input" name="category"><option value="">Toutes</option>${S.cats.map((c) => `<option value="${c.slug}" ${p.get("category") === c.slug ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-        <label class="f"><span>Format</span><select class="input" name="media"><option value="">Tous</option>${Object.entries(MEDIA).map(([k, v]) => `<option value="${k}" ${p.get("media") === k ? "selected" : ""}>${v[1]}</option>`).join("")}</select></label>
-        <label class="f"><span>Couverture</span><select class="input" name="status"><option value="">Toutes</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${p.get("status") === k ? "selected" : ""}>${v[2]}</option>`).join("")}</select></label>
-        <label class="f"><span>Langue</span><select class="input" name="lang"><option value="">Toutes</option><option value="fr" ${p.get("lang") === "fr" ? "selected" : ""}>Français</option><option value="en" ${p.get("lang") === "en" ? "selected" : ""}>Anglais</option></select></label>
-        <label class="f"><span>Trier par</span><select class="input" name="sort">${[["date", "Plus récent"], ["ancien", "Plus ancien"], ["verification", "Nombre de médias"]].map(([k, l]) => `<option value="${k}" ${p.get("sort") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-        <label class="f" style="display:flex;align-items:center;gap:8px;margin-top:26px"><input type="checkbox" name="dedup" value="1" ${p.get("dedup") === "1" ? "checked" : ""}> Masquer les doublons</label>
-      </div>
-      <div class="row"><button class="btn primary">${ico("search")} Rechercher</button><a class="btn ghost" href="/recherche">Réinitialiser</a></div>
-    </form>
-    <div id="results" style="margin-top:18px"></div>`;
-  $("#searchForm").onsubmit = (e) => {
+    <div style="max-width:820px;margin:0 auto">
+      <h1>Rechercher</h1>
+      <p class="lead" style="margin-bottom:14px">Tapez simplement ce qui vous intéresse : un sujet, une personne, un pays ou un média. Pas besoin d'accents ni de majuscules.</p>
+      <form id="searchForm" role="search">
+        <div class="search-big"><label class="sr" for="searchQ">Votre recherche</label>
+          <input class="input" id="searchQ" name="q" value="${esc(q)}" placeholder="Exemple : Côte d'Ivoire" autocomplete="off" list="searchHints">
+          <datalist id="searchHints"></datalist>
+          <button class="btn primary">${ico("search")} Rechercher</button></div>
+        <div class="chips" style="margin:10px 0 4px"><span class="small muted" style="align-self:center">Essayez :</span><span id="searchExamples" class="chips">${SEARCH_EXAMPLES.map((x) => `<a class="chip" href="/recherche?q=${encodeURIComponent(x)}">${esc(x)}</a>`).join("")}</span></div>
+        <fieldset class="periods"><legend class="sr">Période</legend>${periods.map(([v, l]) => `<label class="chip ${(p.get("periode") || "") === v ? "active" : ""}"><input class="sr" type="radio" name="periode" value="${v}" ${(p.get("periode") || "") === v ? "checked" : ""}>${l}</label>`).join("")}</fieldset>
+        <details class="more-filters" ${advanced ? "open" : ""}><summary>Plus de filtres (facultatif)</summary>
+          <div class="grid g3" style="margin-top:12px">
+            <label class="f"><span>Rubrique</span><select class="input" name="category"><option value="">Toutes</option>${S.cats.map((c) => `<option value="${c.slug}" ${p.get("category") === c.slug ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+            <label class="f"><span>Média</span><select class="input" name="source"><option value="">Tous</option>${srcs.map((x) => `<option value="${x.id}" ${p.get("source") == x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+            <label class="f"><span>Format</span><select class="input" name="media"><option value="">Tous</option>${Object.entries(MEDIA).map(([k, v]) => `<option value="${k}" ${p.get("media") === k ? "selected" : ""}>${v[1]}</option>`).join("")}</select></label>
+            <label class="f"><span>Auteur</span><input class="input" name="author" value="${esc(p.get("author") || "")}"></label>
+            <label class="f"><span>Du</span><input class="input" type="date" name="from" value="${esc(p.get("from") || "")}"></label>
+            <label class="f"><span>Au</span><input class="input" type="date" name="to" value="${esc(p.get("to") || "")}"></label>
+            <label class="f"><span>Nombre de médias</span><select class="input" name="status"><option value="">Peu importe</option>${Object.entries(STATUS).filter(([k]) => k !== "en_attente").map(([k, v]) => `<option value="${k}" ${p.get("status") === k ? "selected" : ""}>${v[2]}</option>`).join("")}</select></label>
+            <label class="f"><span>Langue</span><select class="input" name="lang"><option value="">Toutes</option><option value="fr" ${p.get("lang") === "fr" ? "selected" : ""}>Français</option><option value="en" ${p.get("lang") === "en" ? "selected" : ""}>Anglais</option></select></label>
+            <label class="f"><span>Trier par</span><select class="input" name="sort">${[["pertinence", "Les plus pertinents"], ["date", "Plus récents"], ["ancien", "Plus anciens"], ["verification", "Nombre de médias"]].map(([k, l]) => `<option value="${k}" ${p.get("sort") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          </div>
+          <label class="small row" style="gap:6px"><input type="checkbox" name="all" value="1" ${p.get("all") === "1" ? "checked" : ""}> Afficher aussi chaque reprise d'un même sujet</label>
+          <p style="margin:10px 0 0"><a class="small" href="/recherche">Tout effacer</a></p>
+        </details>
+      </form>
+    </div>
+    <div id="results" style="margin-top:22px"></div>`;
+  const form = $("#searchForm");
+  form.onsubmit = (e) => {
     e.preventDefault();
-    const fd = new URLSearchParams([...new FormData(e.target)].filter(([, v]) => v));
+    const fd = new URLSearchParams([...new FormData(form)].filter(([k, v]) => v && !(k === "sort" && v === "pertinence")));
     nav("/recherche?" + fd);
   };
-  if ([...p.keys()].length) {
-    $("#results").innerHTML = skeleton(3);
-    const r = await get("/api/search?" + p);
-    $("#results").innerHTML = `<div class="muted" style="margin-bottom:10px">${r.total} résultat(s)</div>` + cards(r.items);
+  $$("input[name=periode]", form).forEach((r) => r.onchange = () => { if ($("#searchQ").value.trim() || p.toString()) form.requestSubmit(); });
+  get("/api/trends").then((t) => {
+    const hints = [...new Set([...t.keywords.map((k) => k.word), ...S.cats.map((c) => c.name), ...srcs.map((x) => x.name)])];
+    const list = $("#searchHints");
+    if (list) list.innerHTML = hints.map((h) => `<option value="${esc(h)}"></option>`).join("");
+  }).catch(() => {});
+  const hasQuery = [...p.keys()].some((k) => p.get(k));
+  if (!hasQuery) { if (!q) $("#searchQ").focus(); return; }
+  $("#results").innerHTML = skeleton(3);
+  const query = new URLSearchParams(p);
+  if (p.get("periode")) query.set("from", dayOffset(+p.get("periode") - 1 < 0 ? 0 : +p.get("periode") - 1));
+  query.delete("periode");
+  if (p.get("all") !== "1") query.set("dedup", "1");
+  query.delete("all");
+  const r = await get("/api/search?" + query);
+  const box = $("#results");
+  if (!box) return;
+  if (!r.total) {
+    box.innerHTML = `<div class="empty">${ico("search")}<h2>Aucun article trouvé${q ? ` pour « ${esc(q)} »` : ""}</h2><p>Essayez un mot plus simple, retirez un filtre ou choisissez « Toutes les dates ». Prisme ne garde que les articles récents de ses médias.</p></div>`;
+    return;
   }
+  box.innerHTML = `<div class="sec-title" style="margin-top:0"><h2>${r.total >= 200 ? "Plus de 200" : r.total} résultat${r.total > 1 ? "s" : ""}${q ? ` pour « ${esc(q)} »` : ""}</h2></div>
+    ${r.relaxed ? `<div class="alert-line info" style="margin-bottom:14px">${ico("info")}<span>Aucun article ne contient tous vos mots. Voici ceux qui en contiennent au moins un.</span></div>` : ""}` + cards(r.items);
 }
 
 async function pageTrends() {
@@ -741,6 +794,7 @@ async function pageSettings() {
       <div class="panel">
         <h2>${ico("eye")} Accessibilité et confort de lecture</h2>
         <label class="f"><span>Taille du texte : <b id="fsv">${Math.round(p.font_scale * 100)} %</b></span><input type="range" id="fs" min="0.85" max="1.6" step="0.05" value="${p.font_scale}"></label>
+        <label class="f"><span>Police</span><select class="input" id="fontSel">${FONTS.map(([k, n, d]) => `<option value="${k}" ${(p.font_family || "prisme") === k ? "selected" : ""}>${n} : ${d}</option>`).join("")}</select></label>
         <div class="switch"><div><b>Thème</b><div class="small muted">Clair, sombre ou selon le système</div></div><select class="input" id="theme" aria-label="Thème" style="width:auto">${[["auto", "Automatique"], ["light", "Clair"], ["dark", "Sombre"]].map(([k, l]) => `<option value="${k}" ${p.theme === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
         <div class="switch"><div><b>Contraste élevé</b><div class="small muted">Pour les personnes malvoyantes</div></div><input type="checkbox" id="hc" aria-label="Contraste élevé" ${p.high_contrast ? "checked" : ""}></div>
         <div class="switch"><div><b>Mode simplifié</b><div class="small muted">Grands boutons et libellés toujours visibles</div></div><input type="checkbox" id="sm" aria-label="Mode simplifié" ${p.simple_mode ? "checked" : ""}></div>
@@ -767,7 +821,7 @@ async function pageSettings() {
     </div>`;
   $("#fs").oninput = (e) => { $("#fsv").textContent = Math.round(e.target.value * 100) + " %"; document.documentElement.style.setProperty("--fs", e.target.value); };
   $("#saveA").onclick = async () => {
-    const prefs = { font_scale: +$("#fs").value, theme: $("#theme").value, high_contrast: $("#hc").checked ? 1 : 0, simple_mode: $("#sm").checked ? 1 : 0 };
+    const prefs = { font_scale: +$("#fs").value, font_family: $("#fontSel").value, theme: $("#theme").value, high_contrast: $("#hc").checked ? 1 : 0, simple_mode: $("#sm").checked ? 1 : 0 };
     if (u) { const r = await put("/api/me", prefs); S.user = r.user; } else store.set("prisme_prefs", prefs);
     applyPrefs(); toast("Préférences d'affichage enregistrées.");
   };
@@ -1053,6 +1107,15 @@ document.addEventListener("click", async (e) => {
       case "mmtab": mmTab = el.dataset.tab; pageMultimedia(); break;
       case "demo": { const r = await post("/api/demo-login", { username: el.dataset.u }); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); break; }
       case "forgot": openForgot(); break;
+      case "textsettings": openTextSettings(); break;
+      case "setfont": await savePrefs({ font_family: el.dataset.font }); $$(".font-choice").forEach((b) => { const on = b === el; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }); toast("Police enregistrée."); break;
+      case "fontsize": {
+        const now = (S.user || store.get("prisme_prefs", {})).font_scale || 1;
+        const v = Math.min(1.6, Math.max(0.85, Math.round((now + +el.dataset.d) * 100) / 100));
+        await savePrefs({ font_scale: v });
+        $("#fsNow").textContent = Math.round(v * 100) + " %";
+        break;
+      }
       case "back": if (history.length > 1) history.back(); else nav("/"); break;
       case "print": window.print(); break;
       case "authtab": $$("[data-act=authtab]").forEach((t) => t.classList.toggle("active", t === el)); $("#loginForm").hidden = el.dataset.t !== "login"; $("#regForm").hidden = el.dataset.t === "login"; break;
@@ -1176,12 +1239,13 @@ async function route() {
 (async function start() {
   if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));   // anciens liens partagés
   $("#menuBtn").innerHTML = ico("menu");
+  applyPrefs();
   $("#refreshBtn").innerHTML = ico("refresh");
   $(".search-ico").innerHTML = ico("search");
   $("#menuBtn").onclick = () => ($("#sidebar").classList.contains("open") ? closeDrawer() : openDrawer());
   $("#drawerBack").onclick = closeDrawer;
   $("#refreshBtn").onclick = () => startRefresh().catch((e) => toast(e.message, 1));
-  $("#quickSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#quickQ").value.trim(); if (q) nav("/recherche?q=" + encodeURIComponent(q) + "&dedup=1"); };
+  $("#quickSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#quickQ").value.trim(); nav(q ? "/recherche?q=" + encodeURIComponent(q) : "/recherche"); };
   S.token = store.get("prisme_token", null);
   [S.cats, S.config] = await Promise.all([get("/api/categories").catch(() => []), get("/api/config").catch(() => ({}))]);
   await refreshMe();

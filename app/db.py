@@ -2,6 +2,7 @@
 import os
 import sqlite3
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,9 +13,16 @@ _lock = threading.RLock()
 _local = threading.local()
 
 
+def normalize(text):
+    """Minuscules, sans accents ni apostrophes : « Côte d’Ivoire » et « cote d ivoire » deviennent identiques."""
+    t = unicodedata.normalize("NFD", text or "")
+    return "".join(c for c in t if unicodedata.category(c) != "Mn").lower().replace("’", " ").replace("'", " ").replace("-", " ")
+
+
 def connect():
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.create_function("norm", 1, normalize, deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -58,6 +66,8 @@ def migrate(conn):
     user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     if "email_verified" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+    if "font_family" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN font_family TEXT NOT NULL DEFAULT 'prisme'")
     if "country" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN country TEXT")
     if "publisher" not in {r[1] for r in conn.execute("PRAGMA table_info(sources)")}:
