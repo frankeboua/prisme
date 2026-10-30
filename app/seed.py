@@ -324,6 +324,7 @@ def seed_public(conn, admin_user=None, admin_password=None):
     for term, simple, definition in GLOSSARY:
         conn.execute("INSERT INTO glossary(term, simple, definition) VALUES (?,?,?)", (term, simple, definition))
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('neutral_sources', '1')")
+    db.fill_publishers(conn)
     conn.commit()
     ensure_admin(conn, admin_user, admin_password)
 
@@ -407,6 +408,7 @@ def seed(conn):
                         VALUES (?,?,?,?,?,?,?,?)""", (uid[u], art[k], reason, desc, url, status, resp, db.now_str() if status in ("corrige", "rejete") else None))
     conn.execute("INSERT INTO notifications(user_id, kind, message) SELECT id, 'systeme', 'Bienvenue sur Prisme ! Configurez vos centres d''intérêt et vos alertes dans Paramètres.' FROM users")
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('demo_anchor', ?)", (db.now_str(),))
+    db.fill_publishers(conn)
     conn.commit()
     make_demo_audio(os.path.join(ROOT, "web", "media", "demo_podcast.wav"))
 

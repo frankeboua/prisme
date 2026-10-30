@@ -129,7 +129,8 @@ const STATUS = {
   non_verifie: ["", "user", "Source unique"], conteste: ["b-warn", "alert", "Désaccord entre sources"], en_attente: ["", "clock", "En attente"],
 };
 const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture observée. Prisme ne certifie pas les faits : voir Notre méthode.">${ico(i)}${esc(label || l)}</span>`; };
-const mediaCount = (a) => new Set([a.source_name, ...(a.others || []).map((o) => o.source_name)]).size;
+const pubOf = (a) => a.source_publisher || a.source_name;
+const mediaCount = (a) => new Set([pubOf(a), ...(a.others || []).map((o) => o.publisher || o.source_name)]).size;
 const spectre = (n) => { n = Math.max(1, n || 1); return `<span class="spectre ${n === 1 ? "one" : ""}" title="${n} média${n > 1 ? "s" : ""} sur ce sujet"><span class="bars" aria-hidden="true">${"<i></i>".repeat(Math.min(n, 12))}</span>${n === 1 ? "1 média" : `${n} médias`}</span>`; };
 const freshBadge = (f) => {
   if (!f) return "";
@@ -190,7 +191,7 @@ const picture = (a, big) => safeUrl(a.image_url)
   : `<img src="${illustration(a)}" alt="" loading="lazy"><span class="illu-tag">Illustration</span>`;
 function card(a) {
   const others = a.others || [];
-  const names = [...new Set(others.map((o) => o.source_name))].filter((n) => n !== a.source_name);
+  const names = [...new Set(others.map((o) => o.publisher || o.source_name))].filter((n) => n !== pubOf(a));
   const why = a.why;
   return `<article class="card" data-id="${a.id}">
     <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
@@ -481,7 +482,7 @@ async function pageCompare(cid) {
     </div>
     <h2 style="margin-top:22px">Traitement par média</h2>
     <div class="compare-grid">${c.articles.map((a) => `
-      <div class="cmp-col">
+      <div class="cmp-col" data-pub="${esc(a.publisher)}">
         <div class="row between"><b>${esc(a.source)}</b>${relBadge(a.reliability, a.certified, a.is_demo)}</div>
         <a href="/article/${a.id}" style="font-weight:600">${esc(a.title)}</a>
         <div class="small muted">${a.rank === 1 ? "Premier à publier · " : `${a.rank}ᵉ à publier · `}${fmtDate(a.published_at)}</div>
@@ -726,14 +727,14 @@ async function pageAdmin() {
     </div>
     <div class="panel" style="margin-top:16px"><h3>${ico("refresh")} Dernière collecte</h3>${st.last_fetch ? `<p class="small">${fmtDate(st.last_fetch.finished_at)} — ${st.last_fetch.sources_ok} source(s) OK, ${st.last_fetch.sources_ko} en échec, <b>${st.last_fetch.new_articles}</b> nouveau(x) contenu(s), ${esc(st.last_fetch.message || "")}.</p>` : `<p class="small muted">Aucune collecte terminée (connexion Internet requise).</p>`}${st.fetching ? `<span class="badge b-info">Collecte en cours…</span>` : ""}</div>
     <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("clock")} Journal des modifications</h3>${changes.length ? `<table class="t"><thead><tr><th>Date</th><th>Auteur</th><th>Objet</th><th>Action</th><th>Détail</th></tr></thead><tbody>${changes.slice(0, 20).map((c) => `<tr><td class="small">${fmtDate(c.at)}</td><td>${esc(c.actor)}</td><td>${esc(c.entity)} ${c.entity_id ?? ""}</td><td>${esc(c.action)}</td><td class="small">${esc(c.detail || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="small muted">Aucune modification enregistrée.</p>`}</div>
-    <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("users")} Utilisateurs (${users.length})</h3><table class="t"><thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Profil</th><th>Lectures</th><th>Favoris</th><th>Signalements</th><th>Inscription</th></tr></thead>
-      <tbody>${users.map((u) => `<tr><td><b>${esc(u.display_name)}</b><div class="small muted">${esc(u.email)}</div></td><td>${esc(u.username)}</td><td>${u.role === "admin" ? `<span class="badge b-info">admin</span>` : "utilisateur"}</td><td class="small">${esc(u.persona || "—")}</td><td>${u.lectures}</td><td>${u.favoris}</td><td>${u.signalements}</td><td class="small">${fmtDate(u.created_at, false)}</td></tr>`).join("")}</tbody></table></div>`;
+    <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("users")} Utilisateurs (${users.length})</h3><table class="t"><thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Pays</th><th>Profil</th><th>Lectures</th><th>Favoris</th><th>Signalements</th><th>Inscription</th></tr></thead>
+      <tbody>${users.map((u) => `<tr><td><b>${esc(u.display_name)}</b><div class="small muted">${esc(u.email)}</div></td><td>${esc(u.username)}</td><td>${u.role === "admin" ? `<span class="badge b-info">admin</span>` : "utilisateur"}</td><td class="small">${esc(u.country || "—")}</td><td class="small">${esc(u.persona || "—")}</td><td>${u.lectures}</td><td>${u.favoris}</td><td>${u.signalements}</td><td class="small">${fmtDate(u.created_at, false)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function pageSettings() {
   const u = S.user;
   const p = u || store.get("prisme_prefs", { font_scale: 1, high_contrast: 0, theme: "auto", simple_mode: 0 });
-  const ints = u ? await get("/api/interests") : [];
+  const [ints, countries] = u ? await Promise.all([get("/api/interests"), get("/api/countries")]) : [[], []];
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("gear")} Paramètres & accessibilité</h1><p class="lead">Adaptez l'affichage à vos besoins et contrôlez la personnalisation de votre fil.</p></div></div>
     <div class="grid g2">
@@ -757,8 +758,10 @@ async function pageSettings() {
         <h2>${ico("user")} Mon compte</h2>
         <form id="accForm"><label class="f"><span>Nom affiché</span><input class="input" name="display_name" value="${esc(u.display_name)}"></label>
         <label class="f"><span>E-mail</span><input class="input" type="email" name="email" value="${esc(u.email)}"></label>
+        <label class="f"><span>Pays de résidence</span><select class="input" name="country"><option value="" ${u.country ? "" : "selected"} disabled>Choisissez votre pays</option>${countryOptions(countries, u.country)}</select></label>
         <label class="f"><span>Mot de passe actuel (requis pour en changer)</span><input class="input" type="password" name="current_password" autocomplete="current-password"></label>
         <label class="f"><span>Nouveau mot de passe, 8 caractères minimum (facultatif)</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label>
+        <label class="f"><span>Confirmez le nouveau mot de passe</span><input class="input" type="password" name="new_password_confirm" minlength="8" autocomplete="new-password"></label>
         <button class="btn primary">${ico("check")} Mettre à jour</button></form>
       </div>` : `<div class="panel"><h2>Personnalisation</h2><p class="muted">Connectez-vous pour choisir vos centres d'intérêt, vos alertes et la part de découverte de votre fil. En mode invité, les préférences d'affichage sont mémorisées dans ce navigateur.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`}
     </div>`;
@@ -778,7 +781,7 @@ async function pageSettings() {
     toast("Personnalisation enregistrée : votre fil a été recalculé.");
   };
   $("#clearH").onclick = async () => { if (confirm("Effacer tout votre historique de lecture ?")) { await del("/api/history"); toast("Historique effacé."); } };
-  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await put("/api/me", Object.fromEntries(new FormData(e.target))); S.user = r.user; renderNav(); e.target.current_password.value = ""; e.target.new_password.value = ""; toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
+  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const data = Object.fromEntries(new FormData(e.target)); if (!data.country) delete data.country; if ((data.new_password || "") !== (data.new_password_confirm || "")) { toast("Les deux mots de passe ne sont pas identiques.", 1); return; } const r = await put("/api/me", data); S.user = r.user; renderNav(); e.target.current_password.value = ""; e.target.new_password.value = ""; e.target.new_password_confirm.value = ""; toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
 }
 
 const PERSONAS = [
@@ -789,7 +792,9 @@ const PERSONAS = [
   ["paul", "Paul", "Senior, lecteur occasionnel", "Grande police, mode simplifié, favoris en un clic"],
   ["sara", "Sara", "Chercheuse / archiviste", "Recherche par date et auteur, export BibTeX, fiabilité"],
 ];
-function pageLogin() {
+const countryOptions = (list, cur) => list.map((c) => `<option ${c === cur ? "selected" : ""}>${esc(c)}</option>`).join("");
+async function pageLogin() {
+  const countries = await get("/api/countries").catch(() => []);
   main().innerHTML = `
     <h1 style="text-align:center;margin-bottom:20px">Votre compte Prisme</h1>
     <div class="auth-wrap">
@@ -798,10 +803,12 @@ function pageLogin() {
         <form id="loginForm"><label class="f"><span>E-mail</span><input class="input" name="username" required autocomplete="username" inputmode="email"></label>
           <label class="f"><span>Mot de passe</span><input class="input" type="password" name="password" required autocomplete="current-password"></label>
           <button class="btn primary" style="width:100%;justify-content:center">Se connecter</button>
-          ${S.config && S.config.email_verification ? `<p class="small" style="text-align:center;margin:10px 0 0"><button type="button" class="linklike" data-act="forgot">Mot de passe oublié ?</button></p>` : ""}</form>
+          <p class="small" style="text-align:center;margin:10px 0 0"><button type="button" class="linklike" data-act="forgot">Mot de passe oublié ?</button></p></form>
         <form id="regForm" hidden><label class="f"><span>Nom complet</span><input class="input" name="display_name" required></label>
           <label class="f"><span>E-mail</span><input class="input" type="email" name="email" required autocomplete="email"></label>
-          <label class="f"><span>Mot de passe (8 caractères minimum)</span><input class="input" type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+          <label class="f"><span>Pays de résidence</span><select class="input" name="country" required><option value="">Choisissez votre pays</option>${countryOptions(countries)}</select></label>
+          <div class="grid g2"><label class="f"><span>Mot de passe (8 caractères minimum)</span><input class="input" type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+          <label class="f"><span>Confirmez le mot de passe</span><input class="input" type="password" name="password_confirm" required minlength="8" autocomplete="new-password"></label></div>
           <div class="f"><span style="display:block;font-weight:600;font-size:.88rem;margin-bottom:6px">Vos centres d'intérêt</span><div class="chips">${S.cats.map((c) => `<label class="chip"><input type="checkbox" name="interests" value="${c.slug}" style="margin-right:4px">${esc(c.name)}</label>`).join("")}</div></div>
           <div id="codeBox" hidden style="margin-top:10px"><div class="alert-line info small" id="codeInfo" style="margin-bottom:10px"></div>
             <label class="f"><span>Code à 6 chiffres reçu par e-mail</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></div>
@@ -819,6 +826,7 @@ function pageLogin() {
   $("#regForm").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    if (fd.get("password") !== fd.get("password_confirm")) { toast("Les deux mots de passe ne sont pas identiques.", 1); e.target.password_confirm.focus(); return; }
     const btn = $("#regBtn");
     btn.disabled = true;
     try {
@@ -923,12 +931,18 @@ async function openShare(id) {
     <button class="btn primary" style="margin-top:10px" data-act="copy" data-text="${esc(postText(a))}">${ico("copy")} Copier la publication</button>`);
 }
 function openForgot() {
+  if (!S.config || !S.config.email_verification) {
+    modal(`<div class="row between"><h2 style="margin:0">Mot de passe oublié</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+      <div class="alert-line warn" style="margin-top:12px">${ico("alert")}<span>La récupération par e-mail n'est pas encore activée sur ce site. En attendant, créez un nouveau compte avec une autre adresse.</span></div>`);
+    return;
+  }
   modal(`<div class="row between"><h2 style="margin:0">Mot de passe oublié</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
     <p class="small muted">Prisme n'envoie jamais de mot de passe. Vous recevez un code, puis vous en choisissez un nouveau.</p>
     <form id="forgotForm"><label class="f"><span>E-mail</span><input class="input" type="email" name="email" required autocomplete="email"></label>
       <div id="forgotStep" hidden><div class="alert-line info small" id="forgotInfo" style="margin-bottom:10px"></div>
         <label class="f"><span>Code à 6 chiffres</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
-        <label class="f"><span>Nouveau mot de passe, 8 caractères minimum</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label></div>
+        <label class="f"><span>Nouveau mot de passe, 8 caractères minimum</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label>
+        <label class="f"><span>Confirmez le nouveau mot de passe</span><input class="input" type="password" name="new_password_confirm" minlength="8" autocomplete="new-password"></label></div>
       <button class="btn primary" id="forgotBtn">Recevoir un code</button></form>`);
   $("#forgotForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -942,6 +956,7 @@ function openForgot() {
         $("#forgotBtn").textContent = "Changer mon mot de passe";
         e.target.code.focus();
       } else {
+        if (data.new_password !== data.new_password_confirm) { toast("Les deux mots de passe ne sont pas identiques.", 1); return; }
         const r = await post("/api/password/reset", data);
         closeModal(); await onLogged(r); toast("Mot de passe changé.");
       }

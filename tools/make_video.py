@@ -41,7 +41,7 @@ with sync_playwright() as p:
     page.goto(BASE + "/", wait_until="networkidle")
     page.wait_for_selector(".front")
     page.wait_for_selector(".topic a.go")
-    shot("Prisme réunit l'actualité de 12 médias")
+    shot("Prisme réunit l'actualité de 11 médias")
     shot("Une vraie une, mise à jour automatiquement", ".lead-story h2", 130)
     shot("Le spectre : une barre par média qui couvre l'événement", "#topics", 60)
     page.locator(".topic a.go").first.click()

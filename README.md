@@ -45,7 +45,7 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 
 | Priorité | Fonctionnalité | Où la trouver |
 |---|---|---|
-| Indispensable | Agrégation RSS (12 flux réels : France 24, RFI, BBC Afrique, Le Monde, Jeune Afrique, Franceinfo, BBC, Al Jazeera, 01net, Numerama, podcast Radio France…) | Fil d'actualité, bouton ⟳ |
+| Indispensable | Agrégation RSS (13 flux réels de 11 médias : France 24, RFI, BBC Afrique, Le Monde, Jeune Afrique, Franceinfo, BBC, Al Jazeera, 01net, Numerama, podcast Radio France…) | Fil d'actualité, bouton ⟳ |
 | Indispensable | Recherche simple et avancée (mots-clés, date, auteur, source, format, statut, langue) | Barre du haut, *Recherche avancée* |
 | Indispensable | Favoris, dossiers de veille | Étoile ☆, *Favoris*, *Veille & alertes* |
 | Indispensable | Dates de publication **et** de collecte, liens vers les sources originales | Page article |

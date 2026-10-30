@@ -55,12 +55,25 @@ def migrate(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(articles)")}
     if "status_reason" not in cols:
         conn.execute("ALTER TABLE articles ADD COLUMN status_reason TEXT")
-    if "email_verified" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
+    user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    if "email_verified" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+    if "country" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN country TEXT")
+    if "publisher" not in {r[1] for r in conn.execute("PRAGMA table_info(sources)")}:
+        conn.execute("ALTER TABLE sources ADD COLUMN publisher TEXT")
+    fill_publishers(conn)
     if not conn.execute("SELECT 1 FROM meta WHERE key='neutral_sources'").fetchone():
         # Plus de note ni de badge « certifiée » attribués à de vrais médias.
         conn.execute("UPDATE sources SET reliability=70, certified=0, reliability_note=NULL WHERE is_demo=0")
         conn.execute("INSERT INTO meta(key, value) VALUES ('neutral_sources', '1')")
+
+
+def fill_publishers(conn):
+    """Regroupe les flux d'un même éditeur : Le Monde Afrique et Le Monde à la une sont un seul média."""
+    conn.execute("""UPDATE sources SET publisher = CASE WHEN name LIKE 'Le Monde%' THEN 'Le Monde' WHEN name LIKE 'BBC%' THEN 'BBC'
+                                                        WHEN name LIKE 'Radio France%' THEN 'Radio France' ELSE name END
+                    WHERE publisher IS NULL""")
 
 
 def log_change(conn, actor, entity, entity_id, action, detail=""):

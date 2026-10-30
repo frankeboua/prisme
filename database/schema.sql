@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     preferred_lang   TEXT    NOT NULL DEFAULT 'fr',
     diversity_ratio  REAL    NOT NULL DEFAULT 0.25, -- part du fil réservée à la découverte
     email_verified   INTEGER NOT NULL DEFAULT 0,
+    country          TEXT,                       -- pays de résidence déclaré à l'inscription
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE TABLE IF NOT EXISTS sources (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT    NOT NULL UNIQUE,
+    publisher          TEXT,                      -- éditeur : plusieurs flux d'un même média comptent pour un seul
     website            TEXT,
     feed_url           TEXT,                      -- NULL = source de démonstration
     country            TEXT,

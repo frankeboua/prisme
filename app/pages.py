@@ -155,9 +155,9 @@ def render(conn, path, site, feed=lambda category="": {"items": []}):
         names = sorted({a["source_name"] for a in arts})
         ld = {"@context": "https://schema.org", "@type": "CollectionPage", "name": c["label"], "mainEntity": {
             "@type": "ItemList", "itemListElement": [{"@type": "ListItem", "position": i + 1, "item": x} for i, x in enumerate(_sources_jsonld(arts, site))]}}
-        return 200, {**base, "title": f"{c['label'][:60]} : ce qu'en disent {len(names)} médias | Prisme" if len(names) > 1 else f"{c['label'][:70]} | Prisme",
+        return 200, {**base, "title": f"{c['label'][:60]} : ce qu'en disent {c['source_count']} médias | Prisme" if c["source_count"] > 1 else f"{c['label'][:70]} | Prisme",
                      "desc": f"Comparaison de la couverture par {', '.join(names[:4])}."[:155],
-                     "canonical": site + topic_path(c["id"], c["label"]), "robots": "index,follow" if len(names) > 1 else "noindex,follow",
+                     "canonical": site + topic_path(c["id"], c["label"]), "robots": "index,follow" if c["source_count"] > 1 else "noindex,follow",
                      "jsonld": ld, "image": next((a["image_url"] for a in arts if a["image_url"]), None), "og_type": "article",
                      "published": _iso(c["last_published"]), "section": next((a["category_name"] for a in arts if a.get("category_name")), None),
                      "main": f"<h1>{escape(c['label'])}</h1><h2>Résumé automatique</h2><p class=\"small muted\">Phrases extraites telles quelles des articles cités ci-dessous.</p><ol>{summary}</ol><h2>Les {len(arts)} articles</h2><ul>{lines}</ul>"}

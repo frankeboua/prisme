@@ -5,6 +5,8 @@ from collections import Counter, defaultdict
 
 from . import db, nlp
 
+PUB = "COALESCE(s.publisher, s.name)"   # plusieurs flux d'un même éditeur comptent pour un seul média
+
 # Les statuts décrivent la couverture observée : Prisme ne certifie pas la véracité d'un fait.
 STATUS_LABEL = {
     "verifie": "Repris par 3 sources ou plus", "partiel": "Repris par 2 sources", "non_verifie": "Source unique",
@@ -40,7 +42,7 @@ EVENT_DAYS = 4
 @db.write
 def recluster(conn, limit=2000):
     arts = db.rows(conn, """SELECT a.id, a.title, a.summary, a.language, a.published_at, a.source_id, a.cluster_id, a.is_demo,
-                                   s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
+                                   COALESCE(s.publisher, s.name) publisher, s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
                             ORDER BY a.first_seen_at DESC LIMIT ?""", (limit,))
     n = len(arts)
     vecs = [nlp.vector(a["title"], nlp.strip_html(a["summary"] or "")) for a in arts]
@@ -74,7 +76,7 @@ def recluster(conn, limit=2000):
             continue
         # Un même média ne publie pas deux fois la même actualité : on n'exige alors
         # une quasi-copie (évite de regrouper les épisodes d'une même série).
-        threshold = DUP_THRESHOLD if arts[i]["source_id"] != arts[j]["source_id"] else 0.8
+        threshold = DUP_THRESHOLD if arts[i]["publisher"] != arts[j]["publisher"] else 0.8
         sim = nlp.cosine(vecs[i], vecs[j])
         if sim >= threshold:
             pairs.append((sim, i, j))
@@ -110,7 +112,7 @@ def recluster(conn, limit=2000):
         latest = db.parse(dates_m[-1]) if dates_m else None
         recent = [a for a in members if latest and a["published_at"] and (latest - db.parse(a["published_at"])).days <= 7] or members
         lead = max(recent, key=lambda a: (a["reliability"], a["published_at"] or ""))
-        values = (lead["title"], lead["id"], len(members), len({a["source_id"] for a in members}),
+        values = (lead["title"], lead["id"], len(members), len({a["publisher"] for a in members}),
                   dates_m[0] if dates_m else None, dates_m[-1] if dates_m else None)
         cid = assigned.get(root)
         if cid:
@@ -147,13 +149,13 @@ def _sents(a):
 
 def _evidence_corpus(conn, art, max_articles=25):
     """Articles d'autres sources susceptibles de confirmer ou d'infirmer l'article."""
-    same = db.rows(conn, """SELECT a.*, s.name source_name, s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
-                            WHERE a.cluster_id=? AND a.id<>? AND a.source_id<>?""",
-                   (art["cluster_id"], art["id"], art["source_id"])) if art.get("cluster_id") else []
+    same = db.rows(conn, """SELECT a.*, s.name source_name, COALESCE(s.publisher, s.name) publisher, s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
+                            WHERE a.cluster_id=? AND a.id<>? AND COALESCE(s.publisher, s.name)<>?""",
+                   (art["cluster_id"], art["id"], art["publisher"])) if art.get("cluster_id") else []
     v = nlp.vector(art["title"], article_text(art))
-    pool = db.rows(conn, """SELECT a.*, s.name source_name, s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
-                            WHERE a.id<>? AND a.source_id<>? AND a.language=? ORDER BY a.first_seen_at DESC LIMIT 600""",
-                   (art["id"], art["source_id"], art["language"]))
+    pool = db.rows(conn, """SELECT a.*, s.name source_name, COALESCE(s.publisher, s.name) publisher, s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
+                            WHERE a.id<>? AND COALESCE(s.publisher, s.name)<>? AND a.language=? ORDER BY a.first_seen_at DESC LIMIT 600""",
+                   (art["id"], art["publisher"], art["language"]))
     scored = sorted(((nlp.cosine(v, _vec(p)), p) for p in pool),
                     key=lambda x: -x[0])
     seen = {a["id"] for a in same}
@@ -198,17 +200,16 @@ def _dispute_reason(conn, article_id):
 @db.write
 def refresh_statuses(conn):
     """La couverture évolue à chaque collecte : les statuts suivent, sauf en cas de désaccord signalé."""
-    conn.execute("""UPDATE articles SET verification_status=CASE
-                        WHEN (SELECT COUNT(DISTINCT x.source_id) FROM articles x WHERE x.cluster_id=articles.cluster_id AND x.source_id<>articles.source_id) >= 2 THEN 'verifie'
-                        WHEN (SELECT COUNT(DISTINCT x.source_id) FROM articles x WHERE x.cluster_id=articles.cluster_id AND x.source_id<>articles.source_id) = 1 THEN 'partiel'
-                        ELSE 'non_verifie' END
-                    WHERE verification_status NOT IN ('conteste','en_attente')""")
+    others = f"""(SELECT COUNT(DISTINCT {PUB}) FROM articles x JOIN sources s ON s.id=x.source_id
+                  WHERE x.cluster_id=articles.cluster_id AND {PUB}<>(SELECT {PUB} FROM sources s WHERE s.id=articles.source_id))"""
+    conn.execute(f"""UPDATE articles SET verification_status=CASE WHEN {others} >= 2 THEN 'verifie' WHEN {others} = 1 THEN 'partiel' ELSE 'non_verifie' END
+                     WHERE verification_status NOT IN ('conteste','en_attente')""")
     conn.commit()
 
 
 @db.write
 def verify_article(conn, article_id):
-    art = db.row(conn, "SELECT a.*, s.reliability, s.name source_name FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.id=?", (article_id,))
+    art = db.row(conn, "SELECT a.*, s.reliability, s.name source_name, COALESCE(s.publisher, s.name) publisher FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.id=?", (article_id,))
     if not art:
         return None
     text = article_text(art)
@@ -238,9 +239,9 @@ def verify_article(conn, article_id):
         hits.sort(key=lambda h: -h[0])
         evid, used_sources = [], set()
         for sim, p, s in hits:
-            if p["source_id"] in used_sources:
+            if p["publisher"] in used_sources:
                 continue
-            used_sources.add(p["source_id"])
+            used_sources.add(p["publisher"])
             evid.append((p, s, _stance(sentence, s, sim, p["reliability"]), sim))
             if len(evid) == 4:
                 break
@@ -269,8 +270,8 @@ def verify_article(conn, article_id):
 
     rel = art["reliability"]
     sens = nlp.tone(art["title"] + " " + text)["sensational"]
-    corroborating = db.scalar(conn, "SELECT COUNT(DISTINCT source_id) FROM articles WHERE cluster_id=? AND source_id<>?",
-                              (art["cluster_id"], art["source_id"])) or 0
+    corroborating = db.scalar(conn, "SELECT COUNT(DISTINCT COALESCE(s.publisher, s.name)) FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.cluster_id=? AND COALESCE(s.publisher, s.name)<>?",
+                              (art["cluster_id"], art["publisher"])) or 0
     if claim_scores:
         base = sum(claim_scores) / len(claim_scores)
     else:
@@ -370,6 +371,7 @@ def compare_cluster(conn, cluster_id):
     if not cl:
         return None
     arts = db.rows(conn, "SELECT * FROM v_articles WHERE cluster_id=? ORDER BY published_at", (cluster_id,))
+    publishers = {r["id"]: r["publisher"] for r in db.rows(conn, "SELECT s.id, COALESCE(s.publisher, s.name) publisher FROM sources s")}
     kw_sets = {}
     for a in arts:
         txt = a["title"] + " " + article_text(a)
@@ -382,7 +384,7 @@ def compare_cluster(conn, cluster_id):
         txt = a["title"] + " " + article_text(a)
         st = Counter(c["status"] for c in db.rows(conn, "SELECT status FROM claims WHERE article_id=?", (a["id"],)))
         items.append({
-            "id": a["id"], "title": a["title"], "source": a["source_name"], "reliability": a["source_reliability"],
+            "id": a["id"], "title": a["title"], "source": a["source_name"], "publisher": publishers.get(a["source_id"], a["source_name"]), "reliability": a["source_reliability"],
             "certified": a["source_certified"], "url": a["url"], "published_at": a["published_at"],
             "author": a["author"], "rank": rank + 1, "word_count": a["word_count"],
             "tone": nlp.tone(txt), "readability": nlp.readability(article_text(a)),
@@ -489,7 +491,7 @@ def explain(a, profile, now):
     return {"score": round(score * 100, 1), "components": details, "reasons": reasons, "discovery": False}
 
 
-FEED_SQL = """SELECT a.*, s.name source_name, s.reliability source_reliability, s.certified source_certified, s.kind source_kind,
+FEED_SQL = """SELECT a.*, s.name source_name, s.reliability source_reliability, s.certified source_certified, s.kind source_kind, COALESCE(s.publisher, s.name) source_publisher,
                      c.slug category_slug, c.name category_name, c.color category_color,
                      cl.size cluster_size, cl.source_count
               FROM articles a JOIN sources s ON s.id=a.source_id
@@ -555,7 +557,7 @@ def decorate(conn, a, now=None):
     a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"))
     a["reports_count"] = db.scalar(conn, "SELECT COUNT(*) FROM reports WHERE article_id=? AND status IN ('en_attente','en_cours')", (a["id"],))
     if a.get("cluster_id"):
-        a["others"] = db.rows(conn, """SELECT a.id, a.title, a.url, a.published_at, s.name source_name FROM articles a
+        a["others"] = db.rows(conn, """SELECT a.id, a.title, a.url, a.published_at, s.name source_name, COALESCE(s.publisher, s.name) publisher FROM articles a
                                        JOIN sources s ON s.id=a.source_id WHERE a.cluster_id=? AND a.id<>? ORDER BY s.reliability DESC""",
                               (a["cluster_id"], a["id"]))
     else:
@@ -593,9 +595,9 @@ def check_alerts(conn, days=7):
 
 def trends(conn, hours=48):
     since = db.ago(hours=hours)
-    arts = db.rows(conn, "SELECT a.title, a.summary, a.source_id FROM articles a WHERE a.published_at>=?", (since,))
+    arts = db.rows(conn, "SELECT a.title, a.summary, COALESCE(s.publisher, s.name) source_id FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.published_at>=?", (since,))
     if len(arts) < 10:
-        arts = db.rows(conn, "SELECT a.title, a.summary, a.source_id FROM articles a ORDER BY a.published_at DESC LIMIT 200")
+        arts = db.rows(conn, "SELECT a.title, a.summary, COALESCE(s.publisher, s.name) source_id FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY a.published_at DESC LIMIT 200")
     by_kw = defaultdict(set)
     count = Counter()
     for a in arts:

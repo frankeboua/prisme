@@ -39,7 +39,7 @@ def admin_token():
 
 
 def new_user(name):
-    return call(server, "POST", "/api/register", {"email": f"{name}@exemple.org", "password": "motdepasse", "display_name": "L"})[2]["token"]
+    return call(server, "POST", "/api/register", {"email": f"{name}@exemple.org", "password": "motdepasse", "display_name": "L", "country": "Sénégal"})[2]["token"]
 
 
 class Case(unittest.TestCase):
@@ -76,7 +76,7 @@ class Auth(Case):
         self.assertIn(429, codes)
 
     def test_register_validation(self):
-        ok = {"email": "Lecteur1@Exemple.org", "password": "motdepasse", "display_name": "L"}
+        ok = {"email": "Lecteur1@Exemple.org", "password": "motdepasse", "display_name": "L", "country": "Sénégal"}
         self.assertEqual(call(server, "POST", "/api/register", {**ok, "email": "pasunmail"})[0], 400)
         self.assertEqual(call(server, "POST", "/api/register", {**ok, "password": "court"})[0], 400)
         self.assertEqual(call(server, "POST", "/api/register", ok)[0], 200)
@@ -84,9 +84,28 @@ class Auth(Case):
         self.assertEqual(db.scalar(CONN, "SELECT username FROM users WHERE email='lecteur1@exemple.org'"), "lecteur1")
         self.assertEqual(call(server, "POST", "/api/login", {"username": "LECTEUR1@exemple.org", "password": "motdepasse"})[0], 200)
 
+    def test_country_and_password_confirmation_are_enforced(self):
+        ok = {"email": "pays@exemple.org", "password": "motdepasse", "password_confirm": "motdepasse", "display_name": "P", "country": "Côte d'Ivoire"}
+        self.assertEqual(call(server, "POST", "/api/register", {k: v for k, v in ok.items() if k != "country"})[0], 400)
+        self.assertEqual(call(server, "POST", "/api/register", {**ok, "country": "Atlantide"})[0], 400)
+        st, _, res = call(server, "POST", "/api/register", {**ok, "password_confirm": "autrechose"})
+        self.assertEqual(st, 400)
+        self.assertIn("identiques", res["error"])
+        st, _, res = call(server, "POST", "/api/register", ok)
+        self.assertEqual(st, 200)
+        self.assertEqual(res["user"]["country"], "Côte d'Ivoire")
+        self.assertEqual(call(server, "PUT", "/api/me", {"country": "Atlantide"}, res["token"])[0], 400)
+        self.assertEqual(call(server, "PUT", "/api/me", {"country": "Mali"}, res["token"])[2]["user"]["country"], "Mali")
+
+    def test_country_list(self):
+        c = call(server, "GET", "/api/countries")[2]
+        self.assertEqual(c[0], "Côte d'Ivoire")
+        self.assertGreater(len(c), 190)
+        self.assertEqual(len(c), len(set(c)))
+
     def test_username_is_generated_without_collision(self):
         new_user("doublon")
-        call(server, "POST", "/api/register", {"email": "doublon@autre.org", "password": "motdepasse", "display_name": "L"})
+        call(server, "POST", "/api/register", {"email": "doublon@autre.org", "password": "motdepasse", "display_name": "L", "country": "Sénégal"})
         self.assertEqual(db.scalar(CONN, "SELECT username FROM users WHERE email='doublon@autre.org'"), "doublon2")
 
     def test_password_change_requires_current_and_revokes_sessions(self):
@@ -127,7 +146,7 @@ class EmailVerification(Case):
         return re.search(r"\b(\d{6})\b", self.sent[-1][2]).group(1)
 
     def test_register_requires_valid_code(self):
-        body = {"email": "verif@exemple.org", "password": "motdepasse", "display_name": "V"}
+        body = {"email": "verif@exemple.org", "password": "motdepasse", "display_name": "V", "country": "Sénégal"}
         self.assertEqual(call(server, "POST", "/api/register", body)[0], 400)
         st, _, res = call(server, "POST", "/api/email/code", {"email": body["email"], "purpose": "register"})
         self.assertEqual(st, 200)
@@ -138,7 +157,7 @@ class EmailVerification(Case):
         self.assertEqual(call(server, "POST", "/api/register", {**body, "code": self.code()})[0], 409)
 
     def test_code_stops_after_five_wrong_attempts(self):
-        body = {"email": "essais@exemple.org", "password": "motdepasse", "display_name": "E"}
+        body = {"email": "essais@exemple.org", "password": "motdepasse", "display_name": "E", "country": "Sénégal"}
         call(server, "POST", "/api/email/code", {"email": body["email"], "purpose": "register"})
         wrong = "000000" if self.code() != "000000" else "111111"
         for _ in range(5):
@@ -216,6 +235,32 @@ class Inputs(Case):
             st, _, body = call(server, "GET", p)
             self.assertEqual(st, 404, p)
             self.assertNotIn('"""PRISME', str(body))
+
+
+class Publishers(Case):
+    def test_two_feeds_of_one_publisher_count_as_one_media(self):
+        ids = {r["name"]: r["id"] for r in db.rows(CONN, "SELECT id, name FROM sources")}
+        monde = [i for n, i in ids.items() if n.startswith("Le Monde")]
+        self.assertEqual(len(monde), 2)
+        title = "Mauritanie : un accord historique sur la gestion du fleuve Sénégal signé à Nouakchott"
+        text = "Les pays riverains ont signé à Nouakchott un accord historique sur la gestion commune du fleuve Sénégal."
+        a = add_article(monde[0], "pub1", title, text)
+        b = add_article(monde[1], "pub2", title, text)
+        engine.recluster(CONN)
+        cl = db.row(CONN, "SELECT c.* FROM clusters c JOIN articles a ON a.cluster_id=c.id WHERE a.id=?", (a,))
+        self.assertEqual(db.scalar(CONN, "SELECT cluster_id FROM articles WHERE id=?", (b,)), cl["id"])
+        self.assertEqual(cl["size"], 2)
+        self.assertEqual(cl["source_count"], 1)
+        engine.verify_article(CONN, a)
+        engine.refresh_statuses(CONN)
+        self.assertEqual(db.scalar(CONN, "SELECT verification_status FROM articles WHERE id=?", (a,)), "non_verifie")
+
+    def test_stats_count_publishers_not_feeds(self):
+        server._anon_cache.clear()
+        st = call(server, "GET", "/api/stats")[2]
+        feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
+        self.assertEqual(feeds, 13)
+        self.assertEqual(st["real_sources"], 11)
 
 
 class Video(Case):

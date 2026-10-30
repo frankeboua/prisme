@@ -50,7 +50,7 @@ class Scenarios(unittest.TestCase):
     def test_register_with_code_displayed_on_screen(self):
         res = call(server, "POST", "/api/email/code", {"email": "demo@exemple.org", "purpose": "register"})[2]
         self.assertEqual(len(res["demo_code"]), 6)
-        body = {"email": "demo@exemple.org", "password": "motdepasse", "display_name": "D"}
+        body = {"email": "demo@exemple.org", "password": "motdepasse", "display_name": "D", "country": "Sénégal"}
         self.assertEqual(call(server, "POST", "/api/register", body)[0], 400)
         self.assertEqual(call(server, "POST", "/api/register", {**body, "code": res["demo_code"]})[0], 200)
 

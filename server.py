@@ -23,6 +23,7 @@ from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from app.countries import COUNTRIES
 from app import db, editorial, engine, images, mail, nlp, pages, rss, seed, translate
 
 PORT = int(os.environ.get("PORT") or os.environ.get("PRISME_PORT") or "8765")
@@ -89,7 +90,7 @@ def http_url(value):
 
 def public_user(u):
     return {k: u[k] for k in ("id", "username", "email", "display_name", "role", "persona", "font_scale", "high_contrast",
-                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "email_verified", "created_at")} if u else None
+                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "email_verified", "country", "created_at")} if u else None
 
 
 # =====================================================================
@@ -105,6 +106,13 @@ def clean_email(value):
     if not EMAIL_RE.match(email):
         raise ApiError(400, "Adresse e-mail invalide.")
     return email
+
+
+def check_new_password(password, confirm):
+    if len(str(password or "")) < 8:
+        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    if str(password) != str(confirm):
+        raise ApiError(400, "Les deux mots de passe ne sont pas identiques.")
 
 
 def _code_hash(email, purpose, code):
@@ -169,10 +177,11 @@ def _new_username(email):
 @db.write
 def register(req, body, user):
     limit("register", req.ip, 30, 600)
-    need(body, "email", "password", "display_name")
+    need(body, "email", "password", "display_name", "country")
     email = clean_email(body["email"])
-    if len(str(body["password"])) < 8:
-        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    check_new_password(body["password"], body.get("password_confirm", body["password"]))
+    if body["country"] not in COUNTRIES:
+        raise ApiError(400, "Choisissez votre pays de résidence dans la liste.")
     display_name = str(body["display_name"]).strip()[:80]
     if db.row(CONN, "SELECT id FROM users WHERE email=?", (email,)):
         raise ApiError(409, "Un compte existe déjà avec cet e-mail. Connectez-vous ou utilisez « Mot de passe oublié ».")
@@ -180,8 +189,8 @@ def register(req, body, user):
     if checked:
         _check_code(email, "register", body.get("code"))
     h, salt = seed.hash_password(body["password"])
-    uid = CONN.execute("INSERT INTO users(username, email, display_name, password_hash, salt, email_verified) VALUES (?,?,?,?,?,?)",
-                       (_new_username(email), email, display_name, h, salt, int(checked))).lastrowid
+    uid = CONN.execute("INSERT INTO users(username, email, display_name, password_hash, salt, email_verified, country) VALUES (?,?,?,?,?,?,?)",
+                       (_new_username(email), email, display_name, h, salt, int(checked), body["country"])).lastrowid
     cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT * FROM categories")}
     for slug in body.get("interests") or []:
         if slug in cats:
@@ -200,8 +209,7 @@ def password_reset(req, body, user):
         raise ApiError(503, "La vérification par e-mail n'est pas encore activée.")
     limit("reset", req.ip, 20, 600)
     email = clean_email(body.get("email"))
-    if len(str(body.get("new_password", ""))) < 8:
-        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    check_new_password(body.get("new_password"), body.get("new_password_confirm", body.get("new_password")))
     u = db.row(CONN, "SELECT id FROM users WHERE email=?", (email,))
     if not u:
         raise ApiError(400, "Code incorrect ou expiré. Demandez-en un nouveau.")
@@ -272,7 +280,7 @@ def me(req, q, user):
 @db.write
 def update_me(req, body, user):
     fields = {"display_name": str, "email": str, "font_scale": float, "high_contrast": int, "theme": str,
-              "simple_mode": int, "preferred_lang": str, "diversity_ratio": float}
+              "simple_mode": int, "preferred_lang": str, "diversity_ratio": float, "country": str}
     sets, vals = [], []
     for k, cast in fields.items():
         if k in body:
@@ -284,6 +292,8 @@ def update_me(req, body, user):
             if k == "theme" and v not in ("auto", "light", "dark"):
                 continue
             sets.append(f"{k}=?"); vals.append(v)
+    if "country" in body and body["country"] not in COUNTRIES:
+        raise ApiError(400, "Choisissez votre pays de résidence dans la liste.")
     if "email" in body:
         body["email"] = clean_email(body["email"])
         if db.row(CONN, "SELECT id FROM users WHERE email=? AND id<>?", (body["email"], user["id"])):
@@ -292,8 +302,7 @@ def update_me(req, body, user):
             sets.append("email_verified=0")   # la nouvelle adresse n'a pas été vérifiée
     changed_password = False
     if body.get("new_password"):
-        if len(str(body["new_password"])) < 8:
-            raise ApiError(400, "Le nouveau mot de passe doit contenir au moins 8 caractères.")
+        check_new_password(body["new_password"], body.get("new_password_confirm", body["new_password"]))
         limit("password", user["id"], 10, 600)
         if not seed.check_password(body.get("current_password", ""), user["password_hash"], user["salt"]):
             raise ApiError(403, "Mot de passe actuel incorrect.")
@@ -345,6 +354,7 @@ def _insert_source(body, items, user):
                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
                        (body["name"], body.get("website"), body["feed_url"], body.get("country"), body.get("language", "fr"),
                         body.get("kind", "web"), cat, 70, 0, None)).lastrowid
+    db.fill_publishers(CONN)
     db.log_change(CONN, user["username"], "source", sid, "ajout", body["name"])
     CONN.commit()
     return {"id": sid, "items_detected": len(items)}
@@ -384,6 +394,11 @@ def qv(q, k, default=None):
 def feed(req, q, user):
     return engine.feed(CONN, user, qv(q, "mode", "pour_vous"), qv(q, "category"), qv(q, "media"), qv(q, "source"),
                        int(qv(q, "limit", 24)), int(qv(q, "offset", 0)))
+
+
+@route("GET", "/api/countries")
+def countries(req, q, user):
+    return COUNTRIES
 
 
 @route("GET", "/api/recall")
@@ -746,8 +761,8 @@ def stats(req, q, user):
     total = s("SELECT COUNT(*) FROM articles")
     clusters = s("SELECT COUNT(*) FROM clusters")
     return {
-        "articles": total, "sources": s("SELECT COUNT(*) FROM sources WHERE active=1"),
-        "real_sources": s("SELECT COUNT(*) FROM sources WHERE is_demo=0 AND active=1"),
+        "articles": total, "sources": s("SELECT COUNT(DISTINCT COALESCE(s.publisher, s.name)) FROM sources s WHERE active=1"),
+        "real_sources": s("SELECT COUNT(DISTINCT COALESCE(s.publisher, s.name)) FROM sources s WHERE is_demo=0 AND active=1"),
         "clusters": clusters, "duplicates": total - clusters,
         "dedup_rate": round(100 * (total - clusters) / total, 1) if total else 0,
         "multi_source_topics": s("SELECT COUNT(*) FROM clusters WHERE source_count>1"),
@@ -838,7 +853,7 @@ def admin_recluster(req, body, user):
 
 @route("GET", "/api/admin/users", "admin")
 def admin_users(req, q, user):
-    return db.rows(CONN, """SELECT u.id, u.username, u.display_name, u.email, u.role, u.persona, u.created_at,
+    return db.rows(CONN, """SELECT u.id, u.username, u.display_name, u.email, u.role, u.persona, u.country, u.created_at,
                             (SELECT COUNT(*) FROM reading_history h WHERE h.user_id=u.id) lectures,
                             (SELECT COUNT(*) FROM favorites f WHERE f.user_id=u.id) favoris,
                             (SELECT COUNT(*) FROM reports r WHERE r.user_id=u.id) signalements
@@ -864,7 +879,7 @@ if PUBLIC:
 TEXT_TYPES = ("text/", "application/javascript", "application/json", "application/xml", "image/svg")
 _template = None
 # Réponses identiques pour tous les visiteurs non connectés : calculées une seule fois par période.
-ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources"}
+ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources", "/api/countries"}
 ANON_TTL = 300    # vidé à chaque collecte
 _anon_cache = {}
 
@@ -1096,6 +1111,11 @@ def bootstrap():
             CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('status_v2', '1')")
             CONN.commit()
         engine.verify_pending(CONN, 5000)
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='publishers_v1'"):
+        # Une fois sur une base existante : le nombre de médias de chaque sujet est recompté par éditeur.
+        engine.recluster(CONN)
+        engine.refresh_statuses(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('publishers_v1', '1')")
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v2'"):
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
         for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
