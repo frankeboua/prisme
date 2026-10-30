@@ -117,13 +117,13 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_SafeRedirect)
 
 
-def fetch(url, timeout=15):
+def fetch(url, timeout=15, max_bytes=MAX_FEED_BYTES):
     assert_public_host(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, application/xml, */*"})
     with _opener.open(req, timeout=timeout) as r:
-        data = r.read(MAX_FEED_BYTES + 1)
-    if len(data) > MAX_FEED_BYTES:
-        raise ValueError("flux trop volumineux")
+        data = r.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("contenu trop volumineux")
     return data
 
 

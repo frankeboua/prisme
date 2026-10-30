@@ -74,6 +74,8 @@ Un expéditeur en `@gmail.com` peut arriver dans les indésirables : un domaine 
 
 ## 6. Fonctionnement en production
 
+- **Photos :** Prisme sert des copies allégées (WebP, 480 et 960 pixels), préparées après chaque collecte et conservées dans `imgcache/`. Si une conversion échoue, le visiteur reçoit la photo d'origine. Ces copies restent à valider avec les conditions d'utilisation des médias.
+- **Cache :** les réponses des visiteurs non connectés sont recalculées au plus une fois par minute.
 - **Serveur :** gunicorn, 1 processus et 8 fils. Ne pas augmenter le nombre de processus : la collecte programmée et la limitation de débit vivent en mémoire.
 - **Sauvegarde :** aucune sur l'offre gratuite, la base y est temporaire.
 - **Journaux :** visibles dans le tableau de bord Render, onglet *Logs*. Les erreurs détaillées n'y figurent que côté serveur, jamais dans les réponses.

@@ -1,12 +1,16 @@
 """Mode production : sécurité, SEO, absence de démonstration, regroupement. Lancer : python -m unittest tests.test_public"""
+import io
 import re
 import unittest
+from datetime import date
+
+from PIL import Image
 
 from tests.helpers import call, setup
 
 setup("public")
 import server  # noqa: E402
-from app import db, engine, mail, nlp, rss  # noqa: E402
+from app import db, editorial, engine, mail, nlp, rss  # noqa: E402
 
 server.bootstrap()
 CONN = server.CONN
@@ -223,6 +227,75 @@ class Video(Case):
         self.assertEqual(call(server, "GET", "/app.css", headers={"range": "bytes=999999999-"})[0], 416)
 
 
+class Fast(Case):
+    def tearDown(self):
+        server._anon_cache.clear()
+
+    def test_anonymous_reads_are_cached_but_not_for_logged_in_readers(self):
+        server._anon_cache.clear()
+        st, h, first = call(server, "GET", "/api/categories")
+        self.assertEqual(st, 200)
+        self.assertEqual(h["cache-control"], "private, max-age=30")
+        self.assertIn("/api/categories?", server._anon_cache)
+        self.assertEqual(call(server, "GET", "/api/categories")[2], first)
+        tok = new_user("cachelecteur")
+        self.assertEqual(call(server, "GET", "/api/feed", token=tok)[1]["cache-control"], "no-store")
+        self.assertNotIn("/api/feed?", server._anon_cache)
+        self.assertTrue(call(server, "GET", "/api/feed", token=tok)[2]["profile"] is not None)
+
+    def test_photo_is_converted_and_cached(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (1600, 1000), "#336699").save(buf, "JPEG")
+        calls = []
+        original = rss.fetch
+        rss.fetch = lambda url, **k: (calls.append(url), buf.getvalue())[1]
+        try:
+            for _ in range(2):
+                st, h, _ = call(server, "GET", f"/img/{A1}-480.webp")
+                self.assertEqual(st, 200)
+                self.assertEqual(h["content-type"], "image/webp")
+                self.assertIn("immutable", h["cache-control"])
+            self.assertEqual(len(calls), 1)
+            st, out, raw = server.handle("GET", f"/img/{A1}-480.webp", {}, lambda n: b"", "1.1.1.1")
+            self.assertEqual(Image.open(io.BytesIO(raw)).size[0], 480)
+            self.assertLess(len(raw), len(buf.getvalue()))
+        finally:
+            rss.fetch = original
+
+    def test_photo_unavailable_falls_back_to_original(self):
+        aid = add_article(src[0], "photo-ko", "Photo indisponible pour ce test", "Texte.", image="https://exemple.org/absente.jpg")
+        original = rss.fetch
+
+        def boom(url, **k):
+            raise OSError("indisponible")
+        rss.fetch = boom
+        try:
+            st, h, _ = call(server, "GET", f"/img/{aid}-480.webp")
+        finally:
+            rss.fetch = original
+        self.assertEqual((st, h["location"]), (302, "https://exemple.org/absente.jpg"))
+
+    def test_image_route_only_serves_known_articles(self):
+        self.assertEqual(call(server, "GET", "/img/999999-480.webp")[0], 404)
+        self.assertEqual(call(server, "GET", f"/img/{OTHER}-480.webp")[0], 404)
+        self.assertEqual(call(server, "GET", "/img/../server.py-480.webp")[0], 404)
+
+
+class EditorialRecall(Case):
+    def test_sport_recall_cites_two_sources_per_match(self):
+        r = call(server, "GET", "/api/recall?category=sport")[2]["recall"]
+        if r:
+            self.assertEqual(len(r["items"]), 2)
+            for i in r["items"]:
+                self.assertEqual(len(i["sources"]), 2)
+                self.assertTrue(all(x["url"].startswith("https://") for x in i["sources"]))
+        self.assertIsNone(call(server, "GET", "/api/recall?category=culture")[2]["recall"])
+
+    def test_recall_expires(self):
+        self.assertIsNotNone(editorial.recall_for("sport", date(2026, 10, 30)))
+        self.assertIsNone(editorial.recall_for("sport", date(2026, 11, 16)))
+
+
 class Headers(Case):
     def test_security_headers(self):
         _, h, _ = call(server, "GET", "/")
@@ -238,6 +311,21 @@ class Headers(Case):
 
 
 class Seo(Case):
+    def test_article_page_is_typed_article_with_exact_date_and_section(self):
+        _, _, html = call(server, "GET", f"/article/{A1}")
+        self.assertIn('property="og:type" content="article"', html)
+        self.assertIn('property="article:published_time"', html)
+        self.assertIn('property="article:section"', html)
+        self.assertIn('"@type": "NewsArticle"', html)
+        self.assertRegex(html, r"\d\d/\d\d/\d{4} à \d\d:\d\d UTC")
+        self.assertIn('class="kicker"', html)
+        self.assertIn('property="og:type" content="website"', call(server, "GET", "/")[2])
+
+    def test_lists_show_section_and_time(self):
+        _, _, html = call(server, "GET", "/")
+        self.assertIn('class="kicker"', html)
+        self.assertRegex(html, r"<time datetime=\"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\">")
+
     def test_home_is_crawlable(self):
         st, _, html = call(server, "GET", "/")
         self.assertEqual(st, 200)

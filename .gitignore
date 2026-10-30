@@ -3,6 +3,7 @@ __pycache__/
 database/*.db
 database/*.db-wal
 database/*.db-shm
+database/imgcache/
 .env
 docs/Rapport_Prisme_Groupe7.pdf
 .venv/

@@ -8,7 +8,7 @@ import unicodedata
 from datetime import timedelta
 from html import escape
 
-from . import db, engine, nlp
+from . import db, editorial, engine, nlp
 
 TAGLINE = "L'actualité comparée, média par média"
 DEFAULT_DESC = ("Prisme réunit les articles de plusieurs médias sur un même événement, montre ce qu'ils ont en commun "
@@ -37,7 +37,12 @@ def topic_path(cid, label):
 
 def _when(s):
     d = db.parse(s)
-    return d.strftime("%d/%m/%Y") if d else "date inconnue"
+    return d.strftime("%d/%m/%Y à %H:%M UTC") if d else "date inconnue"
+
+
+def _iso(s):
+    d = db.parse(s)
+    return d.strftime("%Y-%m-%dT%H:%M:%SZ") if d else None
 
 
 def _items(conn, where, params=(), limit=30, order="a.published_at DESC"):
@@ -53,30 +58,68 @@ def _list(items):
         n = a.get("source_count") or 1
         link = topic_path(a["cluster_id"], a["title"]) if n > 1 else article_path(a)
         excerpt = escape(nlp.strip_html(a.get("summary") or "")[:220])
-        out.append(f'<li><h3><a href="{escape(link)}">{escape(a["title"])}</a></h3>'
-                   f'<p class="small muted">{escape(a["source_name"])} · {_when(a["published_at"])}'
+        out.append(f'<li><span class="kicker">{escape(a.get("category_name") or "Actualité")}</span><h3><a href="{escape(link)}">{escape(a["title"])}</a></h3>'
+                   f'<p class="small muted">{escape(a["source_name"])} · <time datetime="{_iso(a["published_at"]) or ""}">{_when(a["published_at"])}</time>'
                    f'{f" · {n} médias" if n > 1 else ""}</p><p>{excerpt}</p></li>')
     return '<ul class="ssr-list">' + "".join(out) + "</ul>"
 
 
+def _picture(a, big):
+    """Mêmes attributs que l'interface : la photo déjà chargée n'est pas téléchargée deux fois."""
+    if not a.get("image_url"):
+        cat = a.get("category_slug") or "actualite"
+        return f'<img src="/illustrations/{escape(cat, True)}-{a["id"] % 3}.svg" alt=""><span class="illu-tag">Illustration</span>'
+    sizes = "(max-width: 820px) 100vw, 66vw" if big else "(max-width: 820px) 100vw, 320px"
+    load = 'fetchpriority="high"' if big else 'loading="lazy"'
+    return (f'<img src="/img/{a["id"]}-{960 if big else 480}.webp" srcset="/img/{a["id"]}-480.webp 480w, /img/{a["id"]}-960.webp 960w" '
+            f'sizes="{sizes}" alt="" {load} decoding="async">')
+
+
+def _front(items):
+    """La une complète dès le HTML : elle s'affiche sans attendre le JavaScript."""
+    if len(items) < 5:
+        return _list(items)
+    lead = next((a for a in items if a.get("image_url")), items[0])
+    rest = [a for a in items if a is not lead]
+
+    def meta(a):
+        return (f'<div class="byline"><strong>{escape(a["source_name"])}</strong><time datetime="{_iso(a["published_at"]) or ""}">{_when(a["published_at"])}</time></div>')
+
+    def kicker(a):
+        return f'<span class="kicker">{escape(a.get("category_name") or "Actualité")}</span>'
+
+    sides = "".join(f'<article class="side-story">{kicker(a)}<h3><a href="{escape(article_path(a), True)}">{escape(a["title"])}</a></h3>{meta(a)}</article>' for a in rest[:4])
+    return (f'<section class="front" aria-label="À la une"><article class="lead-story"><a class="frame" href="{escape(article_path(lead), True)}" tabindex="-1" aria-hidden="true">{_picture(lead, True)}</a>'
+            f'{kicker(lead)}<h2 class="lead-title"><a href="{escape(article_path(lead), True)}">{escape(lead["title"])}</a></h2><p class="sum">{escape(lead.get("summary") or "")}</p>{meta(lead)}</article>'
+            f'<div class="side-col">{sides}</div></section><div class="sec-title"><h2>Le fil</h2></div>{_list(rest[4:])}')
+
+
+def _recall(slug):
+    r = editorial.recall_for(slug)
+    if not r:
+        return ""
+    lines = "".join(f"<li><b>{escape(i['match'])}</b> ({escape(i['competition'])}, {i['date']}) : "
+                    + ", ".join(f'<a rel="noopener" href="{escape(x["url"], True)}">{escape(x["name"])}</a>' for x in i["sources"]) + "</li>" for i in r["items"])
+    return f"<h2>{escape(r['title'])}</h2><ul>{lines}</ul>"
+
+
 def _sources_jsonld(arts, site):
     return [{"@type": "NewsArticle", "headline": a["title"][:110], "url": a["url"],
-             "datePublished": (a["published_at"] or "").replace(" ", "T") + "Z",
+             "datePublished": _iso(a["published_at"]), "articleSection": a.get("category_name"),
              "publisher": {"@type": "Organization", "name": a.get("source_name") or a.get("source")}}
             for a in arts if a.get("url")]
 
 
-def render(conn, path, site):
+def render(conn, path, site, feed=lambda category="": {"items": []}):
     """Retourne (statut, contexte de page) pour une URL publique, ou None si elle n'existe pas."""
     home = {"@context": "https://schema.org", "@type": "WebSite", "name": "Prisme", "url": site + "/",
             "potentialAction": {"@type": "SearchAction", "target": site + "/recherche?q={q}", "query-input": "required name=q"}}
     base = dict(title=f"Prisme — {TAGLINE}", desc=DEFAULT_DESC, canonical=site + path, robots="index,follow", image=None, jsonld=None, main="")
 
     if path == "/":
-        lead = _items(conn, "a.is_cluster_lead=1", limit=30, order="COALESCE(cl.source_count,1) DESC, a.published_at DESC")
-        recent = [a for a in lead if (db.parse(a["published_at"]) or db.now()) >= db.now() - timedelta(days=3)] or lead
-        return 200, {**base, "jsonld": home, "image": next((a["image_url"] for a in recent if a["image_url"]), None),
-                     "main": f"<h1>Prisme : {escape(TAGLINE.lower())}</h1><p class=\"lead\">{escape(DEFAULT_DESC)}</p><h2>À la une</h2>{_list(recent[:24])}"}
+        items = feed("")["items"]
+        return 200, {**base, "jsonld": home, "image": next((a["image_url"] for a in items if a.get("image_url")), None),
+                     "main": f'<h1 class="sr">Prisme : {escape(TAGLINE.lower())}</h1>{_front(items)}'}
 
     m = re.fullmatch(r"/article/(\d+)(-[a-z0-9-]*)?", path)
     if m:
@@ -86,9 +129,17 @@ def render(conn, path, site):
         text = nlp.strip_html(a.get("content") or a.get("summary") or "")
         link = f'<p><a rel="noopener" href="{escape(a["url"])}">Lire l\'article original sur {escape(a["source_name"])}</a></p>' if a["url"] else ""
         # Un extrait seul n'apporte rien de plus que l'original : ces pages ne sont pas proposées à l'indexation.
+        section = a.get("category_name") or "Actualité"
+        ld = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": a["title"][:110], "datePublished": _iso(a["published_at"]), "articleSection": section,
+              "mainEntityOfPage": site + article_path(a), "publisher": {"@type": "Organization", "name": a["source_name"]}}
+        if a["url"]:
+            ld["isBasedOn"] = a["url"]
+        if a["image_url"]:
+            ld["image"] = a["image_url"]
         return 200, {**base, "title": f"{a['title'][:70]} — {a['source_name']} | Prisme", "desc": text[:155] or DEFAULT_DESC,
-                     "canonical": site + article_path(a), "robots": "noindex,follow", "image": a["image_url"],
-                     "main": f"<h1>{escape(a['title'])}</h1><p class=\"small muted\">{escape(a['source_name'])} · publié le {_when(a['published_at'])}</p><p>{escape(text[:600])}</p>{link}"}
+                     "canonical": site + article_path(a), "robots": "noindex,follow", "image": a["image_url"], "jsonld": ld,
+                     "og_type": "article", "published": _iso(a["published_at"]), "section": section,
+                     "main": f"<span class=\"kicker\">{escape(section)}</span><h1>{escape(a['title'])}</h1><p class=\"small muted\">{escape(a['source_name'])} · publié le <time datetime=\"{_iso(a['published_at']) or ''}\">{_when(a['published_at'])}</time></p><p>{escape(text[:600])}</p>{link}"}
 
     m = re.fullmatch(r"/sujet/(\d+)(-[a-z0-9-]*)?", path)
     if m:
@@ -107,7 +158,8 @@ def render(conn, path, site):
         return 200, {**base, "title": f"{c['label'][:60]} : ce qu'en disent {len(names)} médias | Prisme" if len(names) > 1 else f"{c['label'][:70]} | Prisme",
                      "desc": f"Comparaison de la couverture par {', '.join(names[:4])}."[:155],
                      "canonical": site + topic_path(c["id"], c["label"]), "robots": "index,follow" if len(names) > 1 else "noindex,follow",
-                     "jsonld": ld, "image": next((a["image_url"] for a in arts if a["image_url"]), None),
+                     "jsonld": ld, "image": next((a["image_url"] for a in arts if a["image_url"]), None), "og_type": "article",
+                     "published": _iso(c["last_published"]), "section": next((a["category_name"] for a in arts if a.get("category_name")), None),
                      "main": f"<h1>{escape(c['label'])}</h1><h2>Résumé automatique</h2><p class=\"small muted\">Phrases extraites telles quelles des articles cités ci-dessous.</p><ol>{summary}</ol><h2>Les {len(arts)} articles</h2><ul>{lines}</ul>"}
 
     m = re.fullmatch(r"/rubrique/([a-z]+)", path)
@@ -116,7 +168,7 @@ def render(conn, path, site):
         if not cat:
             return None
         return 200, {**base, "title": f"{cat['name']} : l'actualité comparée | Prisme", "desc": f"Les derniers sujets de la rubrique {cat['name']}, comparés entre plusieurs médias.",
-                     "main": f"<h1>{escape(cat['name'])}</h1>{_list(_items(conn, 'a.is_cluster_lead=1 AND c.slug=?', (cat['slug'],)))}"}
+                     "main": f"<span class=\"kicker\">Rubrique</span><h1>{escape(cat['name'])}</h1>{_recall(cat['slug'])}{_front(feed(cat['slug'])['items'])}"}
 
     if path == "/sources":
         srcs = db.rows(conn, "SELECT name, website, country, kind FROM sources WHERE active=1 ORDER BY name")
@@ -150,18 +202,22 @@ def fill_template(tpl, ctx, conn):
     meta = [f'<meta name="description" content="{escape(ctx["desc"], True)}">',
             f'<meta name="robots" content="{ctx["robots"]}">',
             f'<link rel="canonical" href="{escape(ctx["canonical"], True)}">',
-            '<meta property="og:site_name" content="Prisme">', '<meta property="og:type" content="website">', '<meta property="og:locale" content="fr_FR">',
+            '<meta property="og:site_name" content="Prisme">', f'<meta property="og:type" content="{ctx.get("og_type", "website")}">', '<meta property="og:locale" content="fr_FR">',
             f'<meta property="og:title" content="{escape(ctx["title"], True)}">',
             f'<meta property="og:description" content="{escape(ctx["desc"], True)}">',
             f'<meta property="og:url" content="{escape(ctx["canonical"], True)}">',
             f'<meta name="twitter:card" content="{"summary_large_image" if ctx["image"] else "summary"}">']
+    if ctx.get("published"):
+        meta.append(f'<meta property="article:published_time" content="{ctx["published"]}">')
+    if ctx.get("section"):
+        meta.append(f'<meta property="article:section" content="{escape(ctx["section"], True)}">')
     if ctx["image"]:
         meta.append(f'<meta property="og:image" content="{escape(ctx["image"], True)}">')
     if ctx["jsonld"]:
         data = json.dumps(ctx["jsonld"], ensure_ascii=False).replace("<", "\\u003c")
         meta.append(f'<script type="application/ld+json">{data}</script>')
     return (tpl.replace("<!--TITLE-->", escape(ctx["title"])).replace("<!--META-->", "\n  ".join(meta))
-            .replace("<!--MAIN-->", ctx["main"]).replace("<!--RUBRICS-->", rubrics_html(conn)))
+            .replace("<!--MAIN-->", f'<div data-ssr="1">{ctx["main"]}</div>' if ctx["main"] else "").replace("<!--RUBRICS-->", rubrics_html(conn)))
 
 
 def sitemap(conn, site):

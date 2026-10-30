@@ -1,2 +1,3 @@
-# Le code applicatif n'utilise que la bibliothèque standard ; gunicorn sert uniquement en production.
+# Production uniquement. En local, l'application fonctionne sans ces paquets : sans Pillow, les photos restent celles des médias.
 gunicorn==23.0.0
+Pillow==11.3.0

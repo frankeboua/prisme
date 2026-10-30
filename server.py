@@ -23,7 +23,7 @@ from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from app import db, engine, mail, nlp, pages, rss, seed, translate
+from app import db, editorial, engine, images, mail, nlp, pages, rss, seed, translate
 
 PORT = int(os.environ.get("PORT") or os.environ.get("PRISME_PORT") or "8765")
 PUBLIC = os.environ.get("PRISME_MODE") == "public"     # production : ni contenu ni compte de démonstration
@@ -384,6 +384,11 @@ def qv(q, k, default=None):
 def feed(req, q, user):
     return engine.feed(CONN, user, qv(q, "mode", "pour_vous"), qv(q, "category"), qv(q, "media"), qv(q, "source"),
                        int(qv(q, "limit", 24)), int(qv(q, "offset", 0)))
+
+
+@route("GET", "/api/recall")
+def recall(req, q, user):
+    return {"recall": editorial.recall_for(qv(q, "category"))}
 
 
 @route("GET", "/api/search")
@@ -769,6 +774,9 @@ def _refresh_job():
     REFRESH["running"] = True
     try:
         REFRESH["last"] = rss.refresh_all(CONN)
+        _anon_cache.clear()
+        images.warm(CONN)
+        _prewarm()
     except Exception:
         traceback.print_exc()
         REFRESH["last"] = {"error": "La collecte a échoué, voir les journaux du serveur."}
@@ -776,6 +784,13 @@ def _refresh_job():
         REFRESH["running"] = False
         _refresh_guard.release()
         CONN.release()
+
+
+def _prewarm():
+    """Calcule d'avance ce que le premier visiteur va demander."""
+    rubrics = [f"/api/feed?mode=pour_vous&category={r['slug']}&media=&offset=0&limit=24" for r in db.rows(CONN, "SELECT slug FROM categories")]
+    for path in ("/api/feed?mode=pour_vous&category=&media=&offset=0&limit=24", *rubrics, "/api/trends", "/api/stats", "/api/categories", "/api/config"):
+        handle("GET", path, {}, lambda n: b"", "127.0.0.1")
 
 
 def scheduler():
@@ -848,6 +863,10 @@ if PUBLIC:
     SECURITY_HEADERS.append(("Strict-Transport-Security", "max-age=31536000"))
 TEXT_TYPES = ("text/", "application/javascript", "application/json", "application/xml", "image/svg")
 _template = None
+# Réponses identiques pour tous les visiteurs non connectés : calculées une seule fois par période.
+ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources"}
+ANON_TTL = 300    # vidé à chaque collecte
+_anon_cache = {}
 
 
 def _user_of(req):
@@ -885,7 +904,17 @@ def _api(method, url, req, read_body):
                     raise ApiError(400, "Requête invalide : objet JSON attendu.")
             else:
                 arg = parse_qs(url.query)
+            key = f"{url.path}?{url.query}" if method == "GET" and not req.headers.get("authorization") and url.path in ANON_CACHED else None
+            if key:
+                hit = _anon_cache.get(key)
+                if hit and hit[0] > time.monotonic():
+                    return 200, hit[1], None, None
             res = fn(req, arg, user, *match.groups())
+            if key:
+                if len(_anon_cache) > 300:
+                    _anon_cache.clear()
+                res = json.dumps(res, ensure_ascii=False, default=str).encode("utf-8")
+                _anon_cache[key] = (time.monotonic() + ANON_TTL, res)
             if isinstance(res, tuple):
                 ctype, body, fname = res
                 return 200, body, ctype + "; charset=utf-8", fname
@@ -908,13 +937,19 @@ def _site(headers):
     return f"{headers.get('x-forwarded-proto', 'http')}://{headers.get('host', f'127.0.0.1:{PORT}')}"
 
 
+def _public_feed(category=""):
+    """Le fil du visiteur non connecté, avec la même adresse et le même cache que l'interface."""
+    url = urlparse(f"/api/feed?mode=pour_vous&category={category}&media=&offset=0&limit=24")
+    return json.loads(_api("GET", url, Request({}, "127.0.0.1"), None)[1])
+
+
 def _page(path, headers):
     global _template
     if _template is None or not PUBLIC:
         with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
             _template = f.read()
     site = _site(headers)
-    found = pages.render(CONN, path, site)
+    found = pages.render(CONN, path, site, _public_feed)
     status, ctx = found if found else (404, pages.not_found(site))
     return status, pages.fill_template(_template, ctx, CONN).encode("utf-8")
 
@@ -945,6 +980,17 @@ def _static(path, headers):
         return 200, f.read(), ctype, extra
 
 
+def _image(article_id, width):
+    """Copie allégée de la photo d'un article déjà collecté : aucune adresse externe n'est acceptée en paramètre."""
+    url = db.scalar(CONN, "SELECT image_url FROM articles WHERE id=?", (article_id,))
+    if not rss.safe_url(url):
+        return 404, b"", "text/plain; charset=utf-8", [("Cache-Control", "no-store")]
+    data = images.get(url, width)
+    if data is None:
+        return 302, b"", "text/plain; charset=utf-8", [("Location", url), ("Cache-Control", "no-store")]
+    return 200, data, "image/webp", [("Cache-Control", "public, max-age=604800, immutable")]
+
+
 def handle(method, raw_path, headers, read_body, ip):
     """Traite une requête. Retourne (statut, en-têtes, corps en octets)."""
     url = urlparse(raw_path)
@@ -955,11 +1001,16 @@ def handle(method, raw_path, headers, read_body, ip):
         if path.startswith("/api/") or path == "/healthz":
             status, res, forced, fname = _api("GET" if method == "HEAD" else method, url, req, read_body)
             ctype = forced or ctype
+            if status == 200 and path in ANON_CACHED and not headers.get("authorization"):
+                extra = [("Cache-Control", "private, max-age=30"), ("Vary", "Authorization")]
             body = res if isinstance(res, bytes) else (res.encode("utf-8") if isinstance(res, str) else json.dumps(res, ensure_ascii=False, default=str).encode("utf-8"))
             if fname:
                 extra.append(("Content-Disposition", f'attachment; filename="{fname}"'))
         elif method not in ("GET", "HEAD"):
             status, body = 405, b'{"error": "Methode non autorisee."}'
+        elif re.fullmatch(r"/img/\d+-\d+\.webp", path):
+            aid, width = re.findall(r"\d+", path)
+            status, body, ctype, extra = _image(int(aid), int(width))
         elif path == "/robots.txt":
             status, body, ctype = 200, pages.robots(_site(headers)).encode("utf-8"), "text/plain; charset=utf-8"
             extra = [("Cache-Control", "public, max-age=3600")]
@@ -1019,6 +1070,7 @@ def bootstrap():
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
     mimetypes.add_type("font/woff2", ".woff2")
+    mimetypes.add_type("image/webp", ".webp")
     os.makedirs(os.path.dirname(db.DB_PATH), exist_ok=True)
     first = not os.path.exists(db.DB_PATH)
     db.init_schema(CONN)
@@ -1044,6 +1096,12 @@ def bootstrap():
             CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('status_v2', '1')")
             CONN.commit()
         engine.verify_pending(CONN, 5000)
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v2'"):
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                            VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
     if PUBLIC:
         seed.ensure_admin(CONN, os.environ.get("PRISME_ADMIN_USER"), os.environ.get("PRISME_ADMIN_PASSWORD"))
     else:

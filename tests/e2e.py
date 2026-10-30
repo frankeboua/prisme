@@ -130,6 +130,17 @@ with sync_playwright() as p:
     check("menu fermé au clavier", page.locator("#sidebar.open").count() == 0)
 
     # Clavier : le premier Tab donne le lien d'évitement
+    page.goto(BASE + "/rubrique/sport", wait_until="networkidle")
+    page.wait_for_selector(".recall")
+    check("rappel sourcé dans la rubrique sport", page.locator(".recall li").count() == 2 and page.locator(".recall a[href^='https://']").count() == 4)
+    page.goto(BASE + "/", wait_until="networkidle")
+    page.wait_for_selector("#feedList .card")
+    cards = page.locator("#feedList .card")
+    n = cards.count()
+    check("chaque carte montre la rubrique et l'heure exacte", n > 0 and cards.locator(".kicker").count() >= n and cards.locator("time").count() >= n,
+          page.locator("#feedList .card time").first.inner_text())
+    check("date et heure lisibles", ":" in page.locator("#feedList .card time").first.inner_text())
+    check("photos servies par Prisme", page.evaluate("[...document.images].filter(i => /^https?:/.test(i.getAttribute('src')) ).length") == 0)
     page.goto(BASE + "/recherche?q=afrique", wait_until="networkidle")
     broken = page.evaluate("[...document.images].filter(i => i.src.includes('/illustrations/') && i.complete && !i.naturalWidth).length")
     check("illustrations affichées", broken == 0 and page.evaluate("[...document.images].length") > 0, str(broken))

@@ -31,6 +31,7 @@ REAL_SOURCES = [
     ("Al Jazeera English", "https://www.aljazeera.com", "https://www.aljazeera.com/xml/rss/all.xml", "Qatar", "en", "tv", "international", 78, 1),
     ("01net", "https://www.01net.com", "https://www.01net.com/actualites/feed/", "France", "fr", "web", "tech", 72, 0),
     ("Numerama", "https://www.numerama.com", "https://www.numerama.com/feed/", "France", "fr", "web", "tech", 74, 0),
+    ("L'Équipe", "https://www.lequipe.fr", "https://dwh.lequipe.fr/api/edito/rss?path=/Football/", "France", "fr", "presse", "sport", 70, 0),
     ("Radio France — Le Cours de l'histoire", "https://www.radiofrance.fr", "https://radiofrance-podcast.net/podcast09/rss_10076.xml", "France", "fr", "podcast", "culture", 85, 1),
 ]
 
