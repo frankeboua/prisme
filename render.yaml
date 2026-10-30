@@ -1,4 +1,4 @@
-# Solution de secours. New > Blueprint, puis renseigner PRISME_ADMIN_PASSWORD quand Render le demande.
+# New > Blueprint, puis renseigner PRISME_ADMIN_PASSWORD quand Render le demande.
 # Offre gratuite : mise en veille après 15 min, base effacée à chaque veille. Voir docs/DEPLOIEMENT.md.
 services:
   - type: web

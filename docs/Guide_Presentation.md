@@ -2,7 +2,7 @@
 
 Scénario de démonstration conçu pour la soutenance du Groupe 7 (ESATIC, L3 TWIN). Chaque étape illustre une fonctionnalité du cahier des charges.
 
-**Avant la séance :** lancer `Lancer_Prisme.bat` 5 minutes à l'avance (collecte des flux réels), vérifier la connexion Internet, agrandir le navigateur en plein écran (F11). Ce scénario utilise le **mode démonstration local**. Le site public, lui, ne contient que des médias réels : ouvrez-le à part pour montrer la version en ligne.
+**Avant la séance :** lancer `Lancer_Prisme.bat` 5 minutes à l'avance (collecte des flux réels), vérifier la connexion Internet, agrandir le navigateur en plein écran (F11). Ce scénario utilise le **mode démonstration local**. Le site public (https://prisme-srbh.onrender.com, QR code : `Prisme_QR_site_public.png` sur le Bureau) ne contient que des médias réels : ouvrez-le 2 à 3 minutes avant de le montrer, car il se met en veille après 15 minutes sans visite.
 
 ---
 
