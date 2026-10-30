@@ -1,6 +1,9 @@
 """Collecteur de flux RSS 2.0 / Atom (agrégation des sources réelles)."""
 import hashlib
+import ipaddress
 import re
+import socket
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +12,8 @@ from datetime import datetime, timezone
 
 from . import db, nlp
 
-UA = "Mozilla/5.0 (Prisme-Agregateur ESATIC; projet academique)"
+UA = "Prisme-Agregateur/1.1 (lecture de flux RSS publics)"
+MAX_FEED_BYTES = 5 * 1024 * 1024
 NS = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/",
       "content": "http://purl.org/rss/1.0/modules/content/", "dc": "http://purl.org/dc/elements/1.1/",
       "itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
@@ -48,7 +52,15 @@ def _duration(s):
     return sec if ":" in s else parts[0]
 
 
+def safe_url(url):
+    """N'accepte que des liens http(s) : écarte javascript:, data:, etc. venus d'un flux."""
+    url = (url or "").strip()
+    return url if url.lower().startswith(("http://", "https://")) else None
+
+
 def parse_feed(xml_bytes):
+    if b"<!ENTITY" in xml_bytes[:4096]:
+        raise ValueError("flux refusé : déclaration d'entités XML")
     root = ET.fromstring(xml_bytes)
     items = []
     for it in root.iter("item"):
@@ -68,17 +80,17 @@ def parse_feed(xml_bytes):
             img = m.group(1) if m else None
         items.append({
             "guid": _text(it, "guid") or _text(it, "link"), "title": nlp.strip_html(_text(it, "title")),
-            "summary": desc, "content": _text(it, "content:encoded"), "url": _text(it, "link"),
+            "summary": desc, "content": _text(it, "content:encoded"), "url": safe_url(_text(it, "link")),
             "author": _text(it, "dc:creator") or _text(it, "author") or _text(it, "itunes:author"),
-            "published_at": _date(_text(it, "pubDate") or _text(it, "dc:date")), "image_url": img,
-            "media_url": media_url, "media_kind": media_kind, "duration": _duration(_text(it, "itunes:duration")),
+            "published_at": _date(_text(it, "pubDate") or _text(it, "dc:date")), "image_url": safe_url(img),
+            "media_url": safe_url(media_url), "media_kind": media_kind, "duration": _duration(_text(it, "itunes:duration")),
         })
     for e in root.findall("atom:entry", NS):
         link = e.find("atom:link", NS)
         items.append({
             "guid": _text(e, "atom:id"), "title": nlp.strip_html(_text(e, "atom:title")),
             "summary": _text(e, "atom:summary") or _text(e, "media:group/media:description"),
-            "content": _text(e, "atom:content"), "url": link.get("href") if link is not None else "",
+            "content": _text(e, "atom:content"), "url": safe_url(link.get("href")) if link is not None else None,
             "author": _text(e, "atom:author/atom:name"),
             "published_at": _date(_text(e, "atom:published") or _text(e, "atom:updated")),
             "image_url": None, "media_url": None, "media_kind": None, "duration": None,
@@ -86,10 +98,33 @@ def parse_feed(xml_bytes):
     return items
 
 
+def assert_public_host(url):
+    """Empêche d'utiliser la collecte pour sonder le réseau interne du serveur."""
+    parts = urllib.parse.urlparse(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("adresse de flux invalide")
+    for info in socket.getaddrinfo(parts.hostname, parts.port or 80, proto=socket.IPPROTO_TCP):
+        if not ipaddress.ip_address(info[4][0]).is_global:
+            raise ValueError("adresse interne refusée")
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        assert_public_host(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_SafeRedirect)
+
+
 def fetch(url, timeout=15):
+    assert_public_host(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, application/xml, */*"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    with _opener.open(req, timeout=timeout) as r:
+        data = r.read(MAX_FEED_BYTES + 1)
+    if len(data) > MAX_FEED_BYTES:
+        raise ValueError("flux trop volumineux")
+    return data
 
 
 def _media_type(src, it):
@@ -151,7 +186,9 @@ def refresh_all(conn, only_id=None):
                 ok += 1
                 new += store(conn, src, items, slug_ids)
     stats = engine.recluster(conn) if new else {}
-    verified = engine.verify_pending(conn) if new else 0
+    verified = engine.verify_pending(conn, 5000) if new else 0
+    if new:
+        engine.refresh_statuses(conn)
     notified = engine.check_alerts(conn) if new else 0
     with db._lock:
         conn.execute("UPDATE fetch_log SET finished_at=?, sources_ok=?, sources_ko=?, new_articles=?, message=? WHERE id=?",

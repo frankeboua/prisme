@@ -1,25 +1,38 @@
 """PRISME — Serveur HTTP et API REST (bibliothèque standard Python uniquement).
 
-Lancement :  python server.py   puis ouvrir http://127.0.0.1:8765
+Lancement local :  python server.py   puis ouvrir http://127.0.0.1:8765
+Production      :  gunicorn wsgi:application (voir wsgi.py), avec PRISME_MODE=public
 """
+import email.utils
+import gzip
+import hashlib
 import json
 import mimetypes
 import os
 import re
 import secrets
+import sqlite3
 import sys
 import threading
+import time
+import traceback
 import webbrowser
+from collections import defaultdict, deque
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from app import db, engine, nlp, rss, seed, translate
+from app import db, engine, nlp, pages, rss, seed, translate
 
-PORT = int(os.environ.get("PRISME_PORT", "8765"))
+PORT = int(os.environ.get("PORT") or os.environ.get("PRISME_PORT") or "8765")
+PUBLIC = os.environ.get("PRISME_MODE") == "public"     # production : ni contenu ni compte de démonstration
+SITE_URL = (os.environ.get("PRISME_SITE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+REFRESH_MINUTES = int(os.environ.get("PRISME_REFRESH_MINUTES", "30"))
+MAX_BODY = 1024 * 1024
 WEB = os.path.join(db.ROOT, "web")
-CONN = None
+CONN = db.ThreadConn()
 ROUTES = []
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
 
 
 def route(method, pattern, auth=None):
@@ -42,6 +55,36 @@ def need(body, *keys):
             raise ApiError(400, f"Champ obligatoire manquant : {k}")
 
 
+_hits = defaultdict(deque)
+_hits_lock = threading.Lock()
+
+
+def limit(bucket, key, max_calls, seconds):
+    """Limitation de débit en mémoire (suffisante pour une instance unique)."""
+    now = time.monotonic()
+    with _hits_lock:
+        if len(_hits) > 20000:
+            _hits.clear()
+        q = _hits[(bucket, key)]
+        while q and q[0] < now - seconds:
+            q.popleft()
+        if len(q) >= max_calls:
+            raise ApiError(429, "Trop de tentatives : merci de patienter quelques instants.")
+        q.append(now)
+
+
+def token_key(token):
+    """Seule l'empreinte du jeton est conservée : une fuite de la base n'ouvre aucune session."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def http_url(value):
+    v = str(value or "").strip()
+    if v and not v.lower().startswith(("http://", "https://")):
+        raise ApiError(400, "Le lien doit commencer par http:// ou https://")
+    return v or None
+
+
 def public_user(u):
     return {k: u[k] for k in ("id", "username", "email", "display_name", "role", "persona", "font_scale", "high_contrast",
                               "theme", "simple_mode", "preferred_lang", "diversity_ratio", "created_at")} if u else None
@@ -53,10 +96,14 @@ def public_user(u):
 @route("POST", "/api/register")
 @db.write
 def register(req, body, user):
+    limit("register", req.ip, 30, 600)
     need(body, "username", "email", "password", "display_name")
-    if len(body["password"]) < 6:
-        raise ApiError(400, "Le mot de passe doit contenir au moins 6 caractères.")
-    if not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", body["username"]):
+    if len(str(body["password"])) < 8:
+        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    if not EMAIL_RE.match(str(body["email"])):
+        raise ApiError(400, "Adresse e-mail invalide.")
+    body["display_name"] = str(body["display_name"]).strip()[:80]
+    if not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", str(body["username"])):
         raise ApiError(400, "Identifiant invalide (3 à 30 caractères : lettres, chiffres, . _ -).")
     if db.row(CONN, "SELECT id FROM users WHERE username=? OR email=?", (body["username"], body["email"])):
         raise ApiError(409, "Cet identifiant ou cet e-mail est déjà utilisé.")
@@ -76,7 +123,7 @@ def register(req, body, user):
 def _open_session(uid):
     token = secrets.token_urlsafe(32)
     CONN.execute("INSERT INTO sessions(token, user_id, expires_at) VALUES (?,?,?)",
-                 (token, uid, db.to_str(db.now() + timedelta(days=7))))
+                 (token_key(token), uid, db.to_str(db.now() + timedelta(days=7))))
     CONN.commit()
     return {"token": token, "user": public_user(db.row(CONN, "SELECT * FROM users WHERE id=?", (uid,)))}
 
@@ -85,16 +132,36 @@ def _open_session(uid):
 @db.write
 def login(req, body, user):
     need(body, "username", "password")
-    u = db.row(CONN, "SELECT * FROM users WHERE username=? OR email=?", (body["username"], body["username"]))
-    if not u or seed.hash_password(body["password"], u["salt"])[0] != u["password_hash"]:
+    name = str(body["username"])[:200]
+    limit("login", req.ip, 30, 60)
+    limit("login-user", name.lower(), 10, 60)
+    u = db.row(CONN, "SELECT * FROM users WHERE username=? OR email=?", (name, name))
+    if not u or not seed.check_password(body["password"], u["password_hash"], u["salt"]):
         raise ApiError(401, "Identifiant ou mot de passe incorrect.")
     return _open_session(u["id"])
+
+
+@route("POST", "/api/demo-login")
+@db.write
+def demo_login(req, body, user):
+    """Connexion en un clic aux personas : uniquement en mode démonstration local."""
+    if PUBLIC:
+        raise ApiError(404, "Route inconnue.")
+    u = db.row(CONN, "SELECT id FROM users WHERE username=? AND (persona IS NOT NULL OR username='admin')", (str(body.get("username")),))
+    if not u:
+        raise ApiError(404, "Profil de démonstration introuvable.")
+    return _open_session(u["id"])
+
+
+@route("GET", "/api/config")
+def config(req, q, user):
+    return {"demo_logins": not PUBLIC, "refresh_minutes": REFRESH_MINUTES if PUBLIC else None}
 
 
 @route("POST", "/api/logout", "user")
 @db.write
 def logout(req, body, user):
-    CONN.execute("DELETE FROM sessions WHERE user_id=? AND token=?", (user["id"], req.token))
+    CONN.execute("DELETE FROM sessions WHERE user_id=? AND token=?", (user["id"], token_key(req.token)))
     CONN.commit()
     return {"ok": True}
 
@@ -124,13 +191,25 @@ def update_me(req, body, user):
             if k == "theme" and v not in ("auto", "light", "dark"):
                 continue
             sets.append(f"{k}=?"); vals.append(v)
+    if "email" in body:
+        if not EMAIL_RE.match(str(body["email"])):
+            raise ApiError(400, "Adresse e-mail invalide.")
+        if db.row(CONN, "SELECT id FROM users WHERE email=? AND id<>?", (body["email"], user["id"])):
+            raise ApiError(409, "Cette adresse e-mail est déjà utilisée.")
+    changed_password = False
     if body.get("new_password"):
-        if len(body["new_password"]) < 6:
-            raise ApiError(400, "Le nouveau mot de passe doit contenir au moins 6 caractères.")
+        if len(str(body["new_password"])) < 8:
+            raise ApiError(400, "Le nouveau mot de passe doit contenir au moins 8 caractères.")
+        limit("password", user["id"], 10, 600)
+        if not seed.check_password(body.get("current_password", ""), user["password_hash"], user["salt"]):
+            raise ApiError(403, "Mot de passe actuel incorrect.")
         h, salt = seed.hash_password(body["new_password"])
         sets += ["password_hash=?", "salt=?"]; vals += [h, salt]
+        changed_password = True
     if sets:
         CONN.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*vals, user["id"]))
+        if changed_password:   # les autres appareils sont déconnectés
+            CONN.execute("DELETE FROM sessions WHERE user_id=? AND token<>?", (user["id"], token_key(req.token)))
         CONN.commit()
     return {"user": public_user(db.row(CONN, "SELECT * FROM users WHERE id=?", (user["id"],)))}
 
@@ -145,25 +224,34 @@ def categories(req, q, user):
 
 @route("GET", "/api/sources")
 def sources(req, q, user):
-    return db.rows(CONN, """SELECT s.*, c.name category_name, (SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) articles
-                            FROM sources s LEFT JOIN categories c ON c.id=s.default_category ORDER BY s.is_demo, s.name""")
+    items = db.rows(CONN, """SELECT s.*, c.name category_name, (SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) articles
+                             FROM sources s LEFT JOIN categories c ON c.id=s.default_category ORDER BY s.is_demo, s.name""")
+    if not (user and user["role"] == "admin"):
+        for it in items:
+            it.pop("last_error", None)
+    return items
 
 
 @route("POST", "/api/sources", "admin")
-@db.write
 def add_source(req, body, user):
     need(body, "name", "feed_url")
-    if not body["feed_url"].startswith(("http://", "https://")):
+    if not str(body["feed_url"]).startswith(("http://", "https://")):
         raise ApiError(400, "L'URL du flux doit commencer par http:// ou https://")
     try:
         items = rss.parse_feed(rss.fetch(body["feed_url"]))
-    except Exception as e:
-        raise ApiError(400, f"Flux RSS illisible ou inaccessible : {e}")
+    except Exception:
+        raise ApiError(400, "Flux RSS illisible ou inaccessible.")
+    with db._lock:
+        return _insert_source(body, items, user)
+
+
+def _insert_source(body, items, user):
     cat = db.scalar(CONN, "SELECT id FROM categories WHERE slug=?", (body.get("category"),))
     sid = CONN.execute("""INSERT INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified, reliability_note)
                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
                        (body["name"], body.get("website"), body["feed_url"], body.get("country"), body.get("language", "fr"),
-                        body.get("kind", "web"), cat, int(body.get("reliability", 60)), int(body.get("certified", 0)), seed.NOTE)).lastrowid
+                        body.get("kind", "web"), cat, 70, 0, None)).lastrowid
+    db.log_change(CONN, user["username"], "source", sid, "ajout", body["name"])
     CONN.commit()
     return {"id": sid, "items_detected": len(items)}
 
@@ -176,6 +264,7 @@ def edit_source(req, body, user, sid):
             CONN.execute(f"UPDATE sources SET {k}=? WHERE id=?", (int(body[k]), int(sid)))
     if "reliability_note" in body:
         CONN.execute("UPDATE sources SET reliability_note=? WHERE id=?", (body["reliability_note"], int(sid)))
+    db.log_change(CONN, user["username"], "source", int(sid), "modification", json.dumps(body, ensure_ascii=False))
     CONN.commit()
     return db.row(CONN, "SELECT * FROM sources WHERE id=?", (int(sid),))
 
@@ -184,6 +273,7 @@ def edit_source(req, body, user, sid):
 @db.write
 def delete_source(req, q, user, sid):
     CONN.execute("DELETE FROM sources WHERE id=? AND is_demo=0", (int(sid),))
+    db.log_change(CONN, user["username"], "source", int(sid), "suppression")
     CONN.commit()
     return {"ok": True}
 
@@ -215,6 +305,8 @@ def search(req, q, user):
         v = qv(q, key)
         if v:
             where.append(f"{col}=?"); params.append(v)
+    if qv(q, "source") and not str(qv(q, "source")).isdigit():
+        raise ApiError(400, "Source invalide.")
     if qv(q, "author"):
         where.append("a.author LIKE ?"); params.append(f"%{qv(q, 'author')}%")
     if qv(q, "from"):
@@ -224,7 +316,7 @@ def search(req, q, user):
     if qv(q, "dedup") == "1":
         where.append("a.is_cluster_lead=1")
     order = {"date": "a.published_at DESC", "ancien": "a.published_at ASC", "fiabilite": "s.reliability DESC, a.published_at DESC",
-             "verification": "a.verification_score DESC"}.get(qv(q, "sort", "date"), "a.published_at DESC")
+             "verification": "COALESCE(cl.source_count, 1) DESC, a.published_at DESC"}.get(qv(q, "sort", "date"), "a.published_at DESC")
     sql = engine.FEED_SQL.replace("WHERE s.active=1", "WHERE 1=1").format(where=" AND " + " AND ".join(where)) + f" ORDER BY {order} LIMIT 200"
     items = db.rows(CONN, sql, params)
     now = db.now()
@@ -250,7 +342,8 @@ def article(req, q, user, aid):
     out["tone"] = nlp.tone(a["title"] + " " + content)
     out["keywords"] = nlp.keywords(a["title"] + " " + content, 8)
     out["claims"] = engine.get_verification(CONN, a["id"])
-    out["source"] = db.row(CONN, "SELECT * FROM sources WHERE id=?", (a["source_id"],))
+    out["source"] = db.row(CONN, "SELECT name, website, country, language, kind, reliability, certified, is_demo, reliability_note FROM sources WHERE id=?", (a["source_id"],))
+    out["path"] = pages.article_path(a)
     out["reports"] = db.rows(CONN, "SELECT reason, status, admin_response, created_at FROM reports WHERE article_id=? ORDER BY created_at DESC", (a["id"],))
     if user:
         out["favorite"] = db.row(CONN, "SELECT * FROM favorites WHERE user_id=? AND article_id=?", (user["id"], a["id"]))
@@ -267,10 +360,13 @@ def article(req, q, user, aid):
 
 @route("GET", r"/api/articles/(\d+)/summary")
 def summary(req, q, user, aid):
-    return engine.summarize(CONN, int(aid), int(qv(q, "n", 4)))
+    res = engine.summarize(CONN, int(aid), min(int(qv(q, "n", 4)), 8))
+    if res is None:
+        raise ApiError(404, "Article introuvable.")
+    return res
 
 
-@route("POST", r"/api/articles/(\d+)/verify")
+@route("POST", r"/api/articles/(\d+)/verify", "admin")
 def reverify(req, body, user, aid):
     res = engine.verify_article(CONN, int(aid))
     return {**res, "claims": engine.get_verification(CONN, int(aid))}
@@ -280,6 +376,10 @@ def reverify(req, body, user, aid):
 def translate_article(req, q, user, aid):
     a = _article(aid)
     dst = qv(q, "lang", "fr" if a["language"] != "fr" else "en")
+    if dst not in ("fr", "en", "es", "de", "ar", "pt"):
+        raise ApiError(400, "Langue non prise en charge.")
+    if not db.row(CONN, "SELECT 1 FROM translations WHERE article_id=? AND lang=?", (a["id"], dst)):
+        limit("translate", req.ip, 30, 60)   # le service externe de traduction a un quota
     return {"lang": dst, **translate.translate_article(CONN, a, dst)}
 
 
@@ -305,7 +405,8 @@ def compare(req, q, user, cid):
 @route("POST", r"/api/articles/(\d+)/share")
 @db.write
 def share(req, body, user, aid):
-    CONN.execute("INSERT INTO shares(user_id, article_id, channel) VALUES (?,?,?)", (user["id"] if user else None, int(aid), body.get("channel", "lien")))
+    limit("share", req.ip, 60, 60)
+    CONN.execute("INSERT INTO shares(user_id, article_id, channel) VALUES (?,?,?)", (user["id"] if user else None, int(aid), str(body.get("channel", "lien"))[:20]))
     CONN.execute("UPDATE articles SET shares=shares+1 WHERE id=?", (int(aid),))
     CONN.commit()
     return {"ok": True}
@@ -345,8 +446,11 @@ def del_favorite(req, q, user, aid):
 @db.write
 def add_folder(req, body, user):
     need(body, "name")
+    color = str(body.get("color", "#0ea5e9"))
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ApiError(400, "Couleur invalide.")
     try:
-        fid = CONN.execute("INSERT INTO folders(user_id, name, color) VALUES (?,?,?)", (user["id"], body["name"].strip(), body.get("color", "#0ea5e9"))).lastrowid
+        fid = CONN.execute("INSERT INTO folders(user_id, name, color) VALUES (?,?,?)", (user["id"], str(body["name"]).strip()[:80], color)).lastrowid
     except Exception:
         raise ApiError(409, "Un dossier porte déjà ce nom.")
     CONN.commit()
@@ -372,7 +476,7 @@ def alerts(req, q, user):
 def add_alert(req, body, user):
     need(body, "keyword")
     with db._lock:
-        CONN.execute("INSERT OR IGNORE INTO alerts(user_id, keyword) VALUES (?,?)", (user["id"], body["keyword"].strip()[:60]))
+        CONN.execute("INSERT OR IGNORE INTO alerts(user_id, keyword) VALUES (?,?)", (user["id"], str(body["keyword"]).strip()[:60]))
         CONN.commit()
     return {"created_notifications": engine.check_alerts(CONN, days=7)}
 
@@ -444,11 +548,16 @@ REASONS = ("factuelle", "date", "source", "titre_trompeur", "traduction", "doubl
 @route("POST", "/api/reports")
 @db.write
 def add_report(req, body, user):
+    limit("report", req.ip, 20, 600)
     need(body, "article_id", "reason", "description")
     if body["reason"] not in REASONS:
         raise ApiError(400, "Motif de signalement invalide.")
+    body["description"] = str(body["description"])
     if len(body["description"].strip()) < 10:
         raise ApiError(400, "Merci de décrire l'erreur (10 caractères minimum).")
+    if not db.scalar(CONN, "SELECT 1 FROM articles WHERE id=?", (int(body["article_id"]),)):
+        raise ApiError(404, "Article introuvable.")
+    body["evidence_url"] = http_url(body.get("evidence_url"))
     rid = CONN.execute("INSERT INTO reports(user_id, article_id, reason, description, evidence_url) VALUES (?,?,?,?,?)",
                        (user["id"] if user else None, int(body["article_id"]), body["reason"], body["description"].strip()[:2000],
                         body.get("evidence_url"))).lastrowid
@@ -478,6 +587,7 @@ def moderate(req, body, user, rid):
     r = db.row(CONN, "SELECT * FROM reports WHERE id=?", (int(rid),))
     if not r:
         raise ApiError(404, "Signalement introuvable.")
+    db.log_change(CONN, user["username"], "signalement", int(rid), status, body.get("correction_note") or body.get("admin_response") or "")
     CONN.execute("UPDATE reports SET status=?, admin_response=?, resolved_at=? WHERE id=?",
                  (status, body.get("admin_response"), db.now_str() if status in ("corrige", "rejete") else None, int(rid)))
     if status == "corrige" and body.get("correction_note"):
@@ -542,7 +652,7 @@ def stats(req, q, user):
         "clusters": clusters, "duplicates": total - clusters,
         "dedup_rate": round(100 * (total - clusters) / total, 1) if total else 0,
         "multi_source_topics": s("SELECT COUNT(*) FROM clusters WHERE source_count>1"),
-        "users": s("SELECT COUNT(*) FROM users"), "claims": s("SELECT COUNT(*) FROM claims"),
+        "users": s("SELECT COUNT(*) FROM users") if user and user["role"] == "admin" else None, "claims": s("SELECT COUNT(*) FROM claims"),
         "evidences": s("SELECT COUNT(*) FROM evidences"),
         "reports_open": s("SELECT COUNT(*) FROM reports WHERE status IN ('en_attente','en_cours')"),
         "reports_total": s("SELECT COUNT(*) FROM reports"),
@@ -556,21 +666,32 @@ def stats(req, q, user):
 
 
 REFRESH = {"running": False, "last": None}
+_refresh_guard = threading.Lock()
 
 
 def _refresh_job():
-    if REFRESH["running"]:
+    if not _refresh_guard.acquire(blocking=False):
         return
     REFRESH["running"] = True
     try:
         REFRESH["last"] = rss.refresh_all(CONN)
-    except Exception as e:
-        REFRESH["last"] = {"error": str(e)}
+    except Exception:
+        traceback.print_exc()
+        REFRESH["last"] = {"error": "La collecte a échoué, voir les journaux du serveur."}
     finally:
         REFRESH["running"] = False
+        _refresh_guard.release()
+        CONN.release()
 
 
-@route("POST", "/api/refresh", "user")
+def scheduler():
+    """Collecte au démarrage puis à intervalle régulier."""
+    while True:
+        _refresh_job()
+        time.sleep(max(REFRESH_MINUTES, 5) * 60)
+
+
+@route("POST", "/api/refresh", "admin")
 def refresh(req, body, user):
     if REFRESH["running"]:
         return {"running": True, "message": "Une collecte est déjà en cours."}
@@ -583,6 +704,17 @@ def refresh_status(req, q, user):
     return REFRESH
 
 
+@route("GET", "/healthz")
+def healthz(req, q, user):
+    last = db.row(CONN, "SELECT finished_at, sources_ok, sources_ko FROM fetch_log WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1")
+    return {"status": "ok", "articles": db.scalar(CONN, "SELECT COUNT(*) FROM articles"), "last_fetch": last, "collecting": REFRESH["running"]}
+
+
+@route("GET", "/api/admin/changes", "admin")
+def admin_changes(req, q, user):
+    return db.rows(CONN, "SELECT * FROM change_log ORDER BY id DESC LIMIT 50")
+
+
 @route("POST", "/api/admin/recluster", "admin")
 def admin_recluster(req, body, user):
     res = engine.recluster(CONN)
@@ -590,6 +722,8 @@ def admin_recluster(req, body, user):
         CONN.execute("UPDATE articles SET verification_status='en_attente'")
         CONN.commit()
     res["verified"] = engine.verify_pending(CONN, 5000)
+    db.log_change(CONN, user["username"], "corpus", None, "recalcul", f"{res['clusters']} sujets")
+    CONN.commit()
     return res
 
 
@@ -603,118 +737,216 @@ def admin_users(req, q, user):
 
 
 # =====================================================================
-#  Serveur HTTP
+#  Cœur HTTP (commun au serveur local et à l'entrée WSGI de production)
 # =====================================================================
+class Request:
+    def __init__(self, headers, ip):
+        self.headers, self.ip, self.token = headers, ip, None
+
+
+SECURITY_HEADERS = [
+    ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; "
+                                "media-src 'self' https: http:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+    ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"), ("Referrer-Policy", "strict-origin-when-cross-origin"),
+    ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
+]
+if PUBLIC:
+    SECURITY_HEADERS.append(("Strict-Transport-Security", "max-age=31536000"))
+TEXT_TYPES = ("text/", "application/javascript", "application/json", "application/xml", "image/svg")
+_template = None
+
+
+def _user_of(req):
+    auth = req.headers.get("authorization", "")
+    req.token = auth[7:] if auth.startswith("Bearer ") else None
+    if not req.token:
+        return None
+    return db.row(CONN, """SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
+                           WHERE s.token=? AND s.expires_at > ?""", (token_key(req.token), db.now_str()))
+
+
+def _api(method, url, req, read_body):
+    for m, rx, auth, fn in ROUTES:
+        match = rx.match(url.path)
+        if m != method or not match:
+            continue
+        try:
+            user = _user_of(req)
+            if auth and not user:
+                raise ApiError(401, "Connexion requise pour cette fonctionnalité.")
+            if auth == "admin" and user["role"] != "admin":
+                raise ApiError(403, "Réservé aux administrateurs.")
+            if method in ("POST", "PUT"):
+                try:
+                    n = int(req.headers.get("content-length") or 0)
+                except ValueError:
+                    raise ApiError(400, "Requête invalide.")
+                if n > MAX_BODY or n < 0:
+                    raise ApiError(413, "Requête trop volumineuse.")
+                try:
+                    arg = json.loads(read_body(n).decode("utf-8")) if n else {}
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ApiError(400, "Requête invalide : corps JSON UTF-8 attendu.")
+                if not isinstance(arg, dict):
+                    raise ApiError(400, "Requête invalide : objet JSON attendu.")
+            else:
+                arg = parse_qs(url.query)
+            res = fn(req, arg, user, *match.groups())
+            if isinstance(res, tuple):
+                ctype, body, fname = res
+                return 200, body, ctype + "; charset=utf-8", fname
+            return 200, res, None, None
+        except ApiError as e:
+            return e.status, {"error": str(e)}, None, None
+        except sqlite3.IntegrityError:
+            return 409, {"error": "Référence invalide ou valeur déjà utilisée."}, None, None
+        except (ValueError, TypeError):
+            return 400, {"error": "Paramètre invalide."}, None, None
+        except Exception:
+            traceback.print_exc()    # le détail reste dans les journaux, jamais dans la réponse
+            return 500, {"error": "Une erreur interne est survenue. Merci de réessayer."}, None, None
+    return 404, {"error": "Route inconnue."}, None, None
+
+
+def _site(headers):
+    if SITE_URL:
+        return SITE_URL
+    return f"{headers.get('x-forwarded-proto', 'http')}://{headers.get('host', f'127.0.0.1:{PORT}')}"
+
+
+def _page(path, headers):
+    global _template
+    if _template is None or not PUBLIC:
+        with open(os.path.join(WEB, "index.html"), encoding="utf-8") as f:
+            _template = f.read()
+    site = _site(headers)
+    found = pages.render(CONN, path, site)
+    status, ctx = found if found else (404, pages.not_found(site))
+    return status, pages.fill_template(_template, ctx, CONN).encode("utf-8")
+
+
+def _static(path, headers):
+    """Fichier de web/ uniquement, avec cache validé par ETag. Retourne None s'il n'existe pas."""
+    full = os.path.realpath(os.path.join(WEB, path.lstrip("/")))
+    if os.path.commonpath([os.path.realpath(WEB), full]) != os.path.realpath(WEB) or not os.path.isfile(full) or full.endswith("index.html"):
+        return None
+    st = os.stat(full)
+    etag = f'"{int(st.st_mtime)}-{st.st_size}"'
+    ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+    if ctype.startswith("text/") or ctype.endswith("javascript"):
+        ctype += "; charset=utf-8"
+    cache = "public, max-age=31536000, immutable" if "/fonts/" in path else "public, max-age=0, must-revalidate"
+    if headers.get("if-none-match") == etag:
+        return 304, b"", ctype, [("ETag", etag), ("Cache-Control", cache)]
+    with open(full, "rb") as f:
+        return 200, f.read(), ctype, [("ETag", etag), ("Cache-Control", cache)]
+
+
+def handle(method, raw_path, headers, read_body, ip):
+    """Traite une requête. Retourne (statut, en-têtes, corps en octets)."""
+    url = urlparse(raw_path)
+    path = url.path
+    req = Request(headers, ip)
+    extra, ctype = [("Cache-Control", "no-store")], "application/json; charset=utf-8"
+    try:
+        if path.startswith("/api/") or path == "/healthz":
+            status, res, forced, fname = _api("GET" if method == "HEAD" else method, url, req, read_body)
+            ctype = forced or ctype
+            body = res if isinstance(res, bytes) else (res.encode("utf-8") if isinstance(res, str) else json.dumps(res, ensure_ascii=False, default=str).encode("utf-8"))
+            if fname:
+                extra.append(("Content-Disposition", f'attachment; filename="{fname}"'))
+        elif method not in ("GET", "HEAD"):
+            status, body = 405, b'{"error": "Methode non autorisee."}'
+        elif path == "/robots.txt":
+            status, body, ctype = 200, pages.robots(_site(headers)).encode("utf-8"), "text/plain; charset=utf-8"
+            extra = [("Cache-Control", "public, max-age=3600")]
+        elif path == "/sitemap.xml":
+            status, body, ctype = 200, pages.sitemap(CONN, _site(headers)).encode("utf-8"), "application/xml; charset=utf-8"
+            extra = [("Cache-Control", "public, max-age=3600")]
+        else:
+            found = _static(path, headers) if "." in path.rsplit("/", 1)[-1] else None
+            if found:
+                status, body, ctype, extra = found
+            else:
+                status, body = _page(path, headers)
+                ctype = "text/html; charset=utf-8"
+                extra = [("Cache-Control", "no-cache")]
+    except Exception:
+        traceback.print_exc()
+        status, body = 500, b'{"error": "Une erreur interne est survenue."}'
+    finally:
+        CONN.release()
+    out = [("Content-Type", ctype), *extra, *SECURITY_HEADERS]
+    if len(body) > 1024 and ctype.startswith(TEXT_TYPES) and "gzip" in headers.get("accept-encoding", ""):
+        body = gzip.compress(body, 5)
+        out += [("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+    out.append(("Content-Length", str(len(body))))
+    out.append(("Date", email.utils.formatdate(usegmt=True)))
+    return status, out, b"" if method == "HEAD" else body
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Prisme/1.0"
+    server_version = "Prisme"
+    sys_version = ""
 
     def log_message(self, fmt, *args):
         if "/api/" in (args[0] if args else ""):
             sys.stdout.write("  %s\n" % (fmt % args))
 
-    def _user(self):
-        auth = self.headers.get("Authorization", "")
-        self.token = auth[7:] if auth.startswith("Bearer ") else None
-        if not self.token:
-            return None
-        return db.row(CONN, """SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
-                               WHERE s.token=? AND s.expires_at > ?""", (self.token, db.now_str()))
-
-    def _send(self, status, payload, ctype="application/json; charset=utf-8", filename=None):
-        data = payload if isinstance(payload, bytes) else (payload.encode("utf-8") if isinstance(payload, str)
-                                                           else json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
+    def _serve(self):
+        headers = {k.lower(): v for k, v in self.headers.items()}
+        status, out, body = handle(self.command, self.path, headers, self.rfile.read, self.client_address[0])
         self.send_response(status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        if filename:
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        for k, v in out:
+            if k != "Date":
+                self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(data)
+        self.wfile.write(body)
 
-    def _api(self, method):
-        url = urlparse(self.path)
-        for m, rx, auth, fn in ROUTES:
-            match = rx.match(url.path)
-            if m != method or not match:
-                continue
-            try:
-                user = self._user()
-                if auth and not user:
-                    raise ApiError(401, "Connexion requise pour cette fonctionnalité.")
-                if auth == "admin" and user["role"] != "admin":
-                    raise ApiError(403, "Réservé aux administrateurs.")
-                if method in ("POST", "PUT"):
-                    n = int(self.headers.get("Content-Length") or 0)
-                    try:
-                        arg = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        raise ApiError(400, "Requête invalide : corps JSON UTF-8 attendu.")
-                else:
-                    arg = parse_qs(url.query)
-                with db._lock:   # une seule connexion SQLite partagée : accès sérialisés
-                    res = fn(self, arg, user, *match.groups())
-                if isinstance(res, tuple):
-                    ctype, body, fname = res
-                    return self._send(200, body, ctype + "; charset=utf-8", fname)
-                return self._send(200, res)
-            except ApiError as e:
-                return self._send(e.status, {"error": str(e)})
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                return self._send(500, {"error": f"Erreur interne : {e}"})
-        self._send(404, {"error": "Route inconnue."})
-
-    def do_GET(self):
-        if self.path.startswith("/api/"):
-            return self._api("GET")
-        path = urlparse(self.path).path
-        if path == "/":
-            path = "/index.html"
-        full = os.path.normpath(os.path.join(WEB, path.lstrip("/")))
-        if not full.startswith(WEB) or not os.path.isfile(full):
-            full = os.path.join(WEB, "index.html")
-        with open(full, "rb") as f:
-            data = f.read()
-        ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
-        if ctype.startswith("text/") or ctype.endswith("javascript"):
-            ctype += "; charset=utf-8"
-        self._send(200, data, ctype)
-
-    def do_POST(self):
-        self._api("POST")
-
-    def do_PUT(self):
-        self._api("PUT")
-
-    def do_DELETE(self):
-        self._api("DELETE")
+    do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _serve
 
 
 def bootstrap():
-    global CONN
+    mimetypes.add_type("application/javascript", ".js")
+    mimetypes.add_type("text/css", ".css")
+    mimetypes.add_type("font/woff2", ".woff2")
+    os.makedirs(os.path.dirname(db.DB_PATH), exist_ok=True)
     first = not os.path.exists(db.DB_PATH)
-    CONN = db.connect()
     db.init_schema(CONN)
     if first or not db.scalar(CONN, "SELECT COUNT(*) FROM categories"):
-        print("  > Création de la base de données et des données de démonstration...")
-        seed.seed(CONN)
-        engine.recluster(CONN)
-        engine.verify_pending(CONN, 5000)
-        engine.check_alerts(CONN)
-    else:
+        if PUBLIC:
+            print("  > Création de la base de production (médias réels uniquement)...")
+            seed.seed_public(CONN)
+        else:
+            print("  > Création de la base de données et des données de démonstration...")
+            seed.seed(CONN)
+            engine.recluster(CONN)
+            engine.verify_pending(CONN, 5000)
+            engine.check_alerts(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('status_v2', '1')")
+    elif not PUBLIC:
         seed.refresh_demo_dates(CONN)
-    seed.make_demo_audio(os.path.join(WEB, "media", "demo_podcast.wav"))
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='status_v2'"):
+        # Base créée avant les statuts de couverture : regroupement et statuts sont recalculés une fois.
+        print("  > Mise à jour des regroupements et des statuts...")
+        engine.recluster(CONN)
+        with db._lock:
+            CONN.execute("UPDATE articles SET verification_status='en_attente'")
+            CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('status_v2', '1')")
+            CONN.commit()
+        engine.verify_pending(CONN, 5000)
+    if PUBLIC:
+        seed.ensure_admin(CONN, os.environ.get("PRISME_ADMIN_USER"), os.environ.get("PRISME_ADMIN_PASSWORD"))
+    else:
+        seed.make_demo_audio(os.path.join(WEB, "media", "demo_podcast.wav"))
     CONN.execute("DELETE FROM sessions WHERE expires_at < ?", (db.now_str(),))
     CONN.commit()
+    CONN.release()
 
 
 def main():
-    mimetypes.add_type("application/javascript", ".js")
-    mimetypes.add_type("text/css", ".css")
     print("=" * 62)
-    print("  PRISME — Agrégateur intelligent des nouveaux médias")
+    print("  PRISME — L'actualité comparée, média par média")
     print("  ESATIC TWIN3 — Groupe 7")
     print("=" * 62)
     bootstrap()

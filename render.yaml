@@ -1,0 +1,17 @@
+# Déploiement Render : New > Blueprint, puis renseigner PRISME_ADMIN_PASSWORD quand Render le demande.
+services:
+  - type: web
+    name: prisme
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PRISME_MODE
+        value: public
+      - key: PRISME_REFRESH_MINUTES
+        value: "30"
+      - key: PRISME_ADMIN_USER
+        value: redaction
+      - key: PRISME_ADMIN_PASSWORD
+        sync: false

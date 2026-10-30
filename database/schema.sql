@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS articles (
     verification_score  INTEGER,
     verified_at         TEXT,
     correction_note     TEXT,                      -- correction publiée suite à un signalement
+    status_reason       TEXT,                      -- 'chiffres' ou 'dementi' lorsque le statut signale un désaccord
     is_demo             INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at DESC);
@@ -247,6 +248,17 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     sources_ko   INTEGER DEFAULT 0,
     new_articles INTEGER DEFAULT 0,
     message      TEXT
+);
+
+-- Traçabilité : qui a changé quoi (modération, sources, statuts)
+CREATE TABLE IF NOT EXISTS change_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         TEXT NOT NULL DEFAULT (datetime('now')),
+    actor      TEXT NOT NULL,
+    entity     TEXT NOT NULL,
+    entity_id  INTEGER,
+    action     TEXT NOT NULL,
+    detail     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS meta (

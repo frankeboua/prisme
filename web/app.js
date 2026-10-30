@@ -8,6 +8,18 @@ const S = { user: null, token: null, cats: [], unread: 0, favs: new Set(), feedM
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const main = () => $("#main");
+function nav(url) { history.pushState(null, "", url); route(); }
+function setTitle(t) { document.title = t.startsWith("Prisme") ? t : `${t} | Prisme`; }
+const safeUrl = (u) => /^https?:\/\//i.test(String(u || "").trim()) ? String(u).trim() : "";
+function openDrawer() { $("#sidebar").classList.add("open"); $("#drawerBack").hidden = false; $("#menuBtn").setAttribute("aria-expanded", "true"); $("#nav a")?.focus(); }
+function closeDrawer() { $("#sidebar").classList.remove("open"); $("#drawerBack").hidden = true; $("#menuBtn").setAttribute("aria-expanded", "false"); }
+async function dateline() {
+  const el = $("#dateline");
+  const today = new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  el.textContent = today.charAt(0).toUpperCase() + today.slice(1);
+  const st = await get("/api/stats").catch(() => null);
+  if (st) el.textContent += ` · ${st.real_sources || st.sources} médias suivis` + (st.last_fetch ? ` · dernière collecte ${ago(st.last_fetch.finished_at)}` : "");
+}
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* stockage indisponible */ } },
@@ -17,11 +29,13 @@ const store = {
 async function api(method, path, body) {
   const headers = { "Content-Type": "application/json" };
   if (S.token) headers.Authorization = "Bearer " + S.token;
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let res;
+  try { res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
+  catch { throw new Error("Connexion au serveur impossible. Vérifiez votre réseau puis réessayez."); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401 && S.token && path !== "/api/login") { logoutLocal(); }
-    throw new Error(data.error || "Erreur réseau");
+    throw new Error(data.error || "Le serveur n'a pas pu traiter la demande.");
   }
   return data;
 }
@@ -111,16 +125,20 @@ const ico = (n) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${P[n]
 //  Badges métier
 // ====================================================================
 const STATUS = {
-  verifie: ["b-ok", "check", "Vérifié"], partiel: ["b-info", "shield", "Partiellement vérifié"],
-  non_verifie: ["b-warn", "help", "Non vérifié"], conteste: ["b-bad", "alert", "Contesté"], en_attente: ["", "clock", "En attente"],
+  verifie: ["b-ok", "layers", "Repris par 3 sources ou plus"], partiel: ["b-info", "layers", "Repris par 2 sources"],
+  non_verifie: ["", "user", "Source unique"], conteste: ["b-warn", "alert", "Désaccord entre sources"], en_attente: ["", "clock", "En attente"],
 };
-const statusBadge = (s, score) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Statut de vérification assistée${score != null ? " — score " + score + "/100" : ""}">${ico(i)}${l}</span>`; };
-const FRESH = { brulant: "b-bad", recent: "b-ok", semaine: "b-info", ancien: "b-warn", archive: "b-warn", inconnue: "" };
-const freshBadge = (f) => f ? `<span class="badge ${f.recirculating ? "b-bad" : FRESH[f.level]}" title="${esc(f.warning || "Indicateur de fraîcheur")}">${ico(f.recirculating ? "alert" : "clock")}${f.recirculating ? "Ancienne info qui recircule" : esc(f.label)}</span>` : "";
+const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture observée. Prisme ne certifie pas les faits : voir Notre méthode.">${ico(i)}${esc(label || l)}</span>`; };
+const spectre = (n) => { n = Math.max(1, n || 1); return `<span class="spectre ${n === 1 ? "one" : ""}" title="${n} média${n > 1 ? "s" : ""} sur ce sujet"><span class="bars" aria-hidden="true">${"<i></i>".repeat(Math.min(n, 12))}</span>${n === 1 ? "1 média" : `${n} médias`}</span>`; };
+const freshBadge = (f) => {
+  if (!f) return "";
+  if (f.recirculating) return `<span class="badge b-warn" title="${esc(f.warning || "")}">${ico("alert")}Ancienne info qui recircule</span>`;
+  return f.level === "brulant" ? `<span class="fresh hot">${esc(f.label)}</span>` : "";
+};
 const MEDIA = { article: ["digest", "Article"], podcast: ["headphones", "Podcast"], video: ["video", "Vidéo"], social: ["social", "Réseaux sociaux"] };
 const mediaBadge = (m) => m && m !== "article" ? `<span class="badge b-info">${ico(MEDIA[m][0])}${MEDIA[m][1]}</span>` : "";
-const catBadge = (a) => a.category_name ? `<span class="badge b-cat" style="background:${esc(a.category_color)}">${esc(a.category_name)}</span>` : "";
-const relBadge = (r, cert) => `<span class="badge ${r >= 75 ? "b-ok" : r >= 50 ? "b-info" : "b-bad"}" title="Indice de fiabilité de la source (paramétrable)">${ico("shield")}${r}/100${cert ? " · certifiée" : ""}</span>`;
+const catBadge = (a) => a.category_name ? `<a class="kicker" href="/rubrique/${esc(a.category_slug)}">${esc(a.category_name)}</a>` : "";
+const relBadge = (r, cert, demo) => demo ? `<span class="badge" title="Score fictif du scénario de démonstration">${r}/100 (démo)</span>` : "";
 const demoBadge = (a) => a.is_demo ? `<span class="badge b-demo" title="Contenu fictif créé pour la démonstration">Démo</span>` : "";
 
 // ====================================================================
@@ -129,25 +147,27 @@ const demoBadge = (a) => a.is_demo ? `<span class="badge b-demo" title="Contenu 
 function navItems() {
   const admin = S.user && S.user.role === "admin";
   return [
-    ["Découvrir"],
-    ["#/", "home", "Fil d'actualité"], ["#/tendances", "trend", "Tendances"], ["#/digest", "digest", "Digest du jour"],
-    ["#/recherche", "search", "Recherche avancée"], ["#/multimedia", "headphones", "Multimédia"],
+    ["Lire"],
+    ["/", "home", "À la une"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
+    ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Recherche avancée"],
     ["Mon espace"],
-    ["#/veille", "eye", "Veille & alertes"], ["#/favoris", "star", "Favoris"],
-    ["#/notifications", "bell", "Notifications", S.unread], ["#/signalements", "flag", "Signalements"],
-    ["Plateforme"],
-    ["#/sources", "db", "Sources & fiabilité"], ...(admin ? [["#/admin", "chart", "Administration"]] : []),
-    ["#/parametres", "gear", "Paramètres & accessibilité"], ["#/projet", "info", "Le projet"],
+    ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
+    ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
+    ["Prisme"],
+    ["/sources", "db", "Médias suivis"], ["/methode", "shield", "Notre méthode"], ...(admin ? [["/admin", "chart", "Administration"]] : []),
+    ["/parametres", "gear", "Paramètres et accessibilité"], ["/projet", "info", "Le projet"],
   ];
 }
 function renderNav() {
-  const cur = location.hash || "#/";
+  const cur = location.pathname;
   $("#nav").innerHTML = navItems().map((n) => n.length === 1 ? `<div class="nav-sec">${n[0]}</div>` :
-    `<a class="nav-a ${(cur === n[0] || (n[0] !== "#/" && cur.startsWith(n[0]))) ? "active" : ""}" href="${n[0]}">${ico(n[1])}<span>${n[2]}</span>${n[3] ? `<span class="count">${n[3]}</span>` : ""}</a>`).join("");
+    `<a class="nav-a ${(cur === n[0] || (n[0] !== "/" && cur.startsWith(n[0]))) ? "active" : ""}" href="${n[0]}" ${cur === n[0] ? 'aria-current="page"' : ""}>${ico(n[1])}<span>${n[2]}</span>${n[3] ? `<span class="count">${n[3]}</span>` : ""}</a>`).join("");
+  $$("#rubrics a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === cur));
   $("#notifBtn").innerHTML = ico("bell") + (S.unread ? `<span class="dot">${S.unread > 99 ? "99+" : S.unread}</span>` : "");
+  $("#refreshBtn").hidden = !(S.user && S.user.role === "admin");
   $("#userBox").innerHTML = S.user
-    ? `<button class="user-chip" data-act="usermenu"><span class="avatar">${initials(S.user.display_name)}</span><span class="nm small"><b>${esc(S.user.display_name)}</b></span></button>`
-    : `<a class="btn primary" href="#/connexion">${ico("user")}<span class="nm">Se connecter</span></a>`;
+    ? `<button class="user-chip" data-act="usermenu" aria-label="Mon compte"><span class="avatar">${esc(initials(S.user.display_name))}</span><span class="nm small"><b>${esc(S.user.display_name)}</b></span></button>`
+    : `<a class="btn" href="/connexion">${ico("user")}<span class="nm">Se connecter</span></a>`;
 }
 
 function applyPrefs() {
@@ -162,32 +182,32 @@ function applyPrefs() {
 // ====================================================================
 //  Composant : carte d'article
 // ====================================================================
-const PH_GRAD = (c) => `linear-gradient(135deg, ${c || "#4f46e5"}, #0f172a)`;
+const picture = (a, cls) => safeUrl(a.image_url)
+  ? `<img src="${esc(safeUrl(a.image_url))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+  : esc(a.category_name || "Actualité");
 function card(a) {
   const others = a.others || [];
-  const img = a.image_url
-    ? `<a class="card-img" href="#/article/${a.id}" style="background-image:url('${esc(a.image_url)}')" aria-label="${esc(a.title)}"><span class="media-tag">${mediaBadge(a.media_type)}</span></a>`
-    : `<a class="card-img ph" href="#/article/${a.id}" style="background:${PH_GRAD(a.category_color)}" aria-hidden="true" tabindex="-1"><span class="media-tag">${mediaBadge(a.media_type)}</span>${ico(MEDIA[a.media_type || "article"][0])}&nbsp;${esc(a.category_name || "Actualité")}</a>`;
+  const names = [...new Set(others.map((o) => o.source_name))];
   const why = a.why;
   return `<article class="card" data-id="${a.id}">
-    ${img}
+    <a class="card-img ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
     <div class="card-body">
-      <div class="row" style="gap:6px">${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${catBadge(a)}${freshBadge(a.freshness)}${statusBadge(a.verification_status, a.verification_score)}${demoBadge(a)}</div>
-      <h3><a href="#/article/${a.id}">${esc(a.title)}</a></h3>
-      ${a.freshness && a.freshness.recirculating ? `<div class="alert-line bad small">${ico("alert")}<span>${esc(a.freshness.warning)}</span></div>` : ""}
+      <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
+      <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>
+      ${a.freshness && a.freshness.recirculating ? `<div class="alert-line warn small">${ico("alert")}<span>${esc(a.freshness.warning)}</span></div>` : ""}
       ${a.correction_note ? `<div class="alert-line ok small">${ico("check")}<span>Correction publiée suite à un signalement.</span></div>` : ""}
       <p class="sum">${esc(a.summary)}</p>
-      <div class="meta"><strong>${esc(a.source_name)}</strong>${relBadge(a.source_reliability, a.source_certified)}<span title="${esc(fmtDate(a.published_at))}">${ico("clock")} ${ago(a.published_at)}</span></div>
-      ${others.length ? `<button class="dup" data-act="compare" data-cluster="${a.cluster_id}">${ico("layers")} ${others.length} autre${others.length > 1 ? "s" : ""} média${others.length > 1 ? "s" : ""} : ${esc([...new Set(others.map((o) => o.source_name))].slice(0, 2).join(", "))}${new Set(others.map((o) => o.source_name)).size > 2 ? "…" : ""} — comparer</button>` : ""}
+      <div class="byline"><strong>${esc(a.source_name)}</strong>${relBadge(a.source_reliability, a.source_certified, a.is_demo)}<span title="${esc(fmtDate(a.published_at))}">${ago(a.published_at)}</span>${a.verification_status === "conteste" ? statusBadge(a.verification_status, a.verification_label) : ""}</div>
+      ${others.length ? `<button class="dup" data-act="compare" data-cluster="${a.cluster_id}">${spectre(names.length + 1)} <span>Comparer : ${esc(names.slice(0, 2).join(", "))}${names.length > 2 ? "…" : ""}</span></button>` : ""}
       <div class="why" hidden></div>
     </div>
     <div class="card-foot">
-      ${a.media_type === "podcast" && a.media_url ? `<button class="btn ghost" data-act="play" data-id="${a.id}">${ico("play")}<span class="lbl">Écouter</span></button>` : ""}
-      <button class="btn ghost" data-act="why" title="Pourquoi cet article m'est-il proposé ?">${ico("help")}<span class="lbl">Pourquoi ?</span></button>
+      ${a.media_type === "podcast" && a.media_url ? `<button class="btn ghost" data-act="play" data-id="${a.id}" aria-label="Écouter">${ico("play")}<span class="lbl">Écouter</span></button>` : ""}
+      <button class="btn ghost" data-act="why" title="Pourquoi cet article est-il proposé ?" aria-label="Pourquoi cet article est-il proposé ?">${ico("help")}<span class="lbl">Pourquoi ?</span></button>
       <span class="grow"></span>
-      <button class="btn ghost" data-act="fav" data-id="${a.id}" title="Ajouter aux favoris" aria-pressed="${S.favs.has(a.id)}" style="${S.favs.has(a.id) ? "color:#f59e0b" : ""}">${ico("star")}<span class="lbl">Favori</span></button>
-      <button class="btn ghost" data-act="share" data-id="${a.id}" title="Partager">${ico("share")}<span class="lbl">Partager</span></button>
-      <button class="btn ghost" data-act="report" data-id="${a.id}" title="Signaler une erreur">${ico("flag")}<span class="lbl">Signaler</span></button>
+      <button class="btn ghost" data-act="fav" data-id="${a.id}" title="Ajouter aux favoris" aria-label="Ajouter aux favoris" aria-pressed="${S.favs.has(a.id)}" style="${S.favs.has(a.id) ? "color:var(--accent)" : ""}">${ico("star")}<span class="lbl">Favori</span></button>
+      <button class="btn ghost" data-act="share" data-id="${a.id}" title="Partager" aria-label="Partager">${ico("share")}<span class="lbl">Partager</span></button>
+      <button class="btn ghost" data-act="report" data-id="${a.id}" title="Signaler une erreur" aria-label="Signaler une erreur">${ico("flag")}<span class="lbl">Signaler</span></button>
     </div>
   </article>`;
 }
@@ -199,7 +219,7 @@ function cards(items) {
 function whyHtml(w) {
   if (!w) return "";
   return `<b>${ico("help")} Pourquoi cet article ?</b>
-    <ul>${(w.reasons.length ? w.reasons : ["Classement par défaut : fraîcheur, fiabilité et couverture médiatique"]).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <ul>${(w.reasons.length ? w.reasons : ["Classement par défaut : fraîcheur et couverture médiatique"]).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
     <div class="small muted" style="margin-top:6px">Score de recommandation : <b>${w.score}</b>/100 — contribution de chaque critère :</div>
     ${w.components.map((c) => `<div class="bar"><span>${esc(c.label.replace("Correspond à vos centres d'intérêt", "Centres d'intérêt"))}</span><span class="track"><i style="width:${c.value}%"></i></span><span class="muted">${c.weight}%</span></div>`).join("")}`;
 }
@@ -210,48 +230,97 @@ const skeleton = (n = 6) => `<div class="feed">${'<div class="skeleton"></div>'.
 //  Pages
 // ====================================================================
 async function pageFeed() {
-  const st = await get("/api/stats").catch(() => null);
-  const greet = S.user ? `Bonjour ${esc(S.user.display_name.split(" ")[0])}` : "L'information sous tous ses angles";
+  const cat = S.cats.find((c) => c.slug === S.feedCat);
+  if (cat) setTitle(`${cat.name} : l'actualité comparée`);
+  const isHome = !S.feedCat && !S.feedMedia && S.feedMode === "pour_vous";
   main().innerHTML = `
-    <section class="hero">
-      <h1>${greet}</h1>
-      <p>Prisme agrège les médias en un seul fil, regroupe les doublons, compare les sources, vérifie les affirmations et vous explique chacune de ses recommandations.</p>
-      ${st ? `<div class="stats"><div><b>${st.articles}</b><span>contenus agrégés</span></div><div><b>${st.sources}</b><span>sources actives</span></div><div><b>${st.duplicates}</b><span>doublons regroupés (${st.dedup_rate} %)</span></div><div><b>${st.claims}</b><span>affirmations analysées</span></div></div>` : ""}
-    </section>
-    <div class="page-head">
-      <div class="tabs" role="tablist">
-        ${[["pour_vous", "ai", S.user ? "Pour vous" : "À la une"], ["recent", "clock", "Les plus récents"], ["tendances", "trend", "Les plus couverts"]].map(([k, i, l]) => `<button class="tab ${S.feedMode === k ? "active" : ""}" data-act="mode" data-mode="${k}">${ico(i)}${l}</button>`).join("")}
+    ${cat ? `<div class="page-head"><div><span class="kicker">Rubrique</span><h1>${esc(cat.name)}</h1></div></div>` : `<h1 class="sr">Prisme : l'actualité comparée, média par média</h1>`}
+    <div id="front">${isHome || cat ? `<div class="skeleton"></div>` : ""}</div>
+    ${!cat ? `<div id="topics"></div>` : ""}
+    <div class="sec-title"><h2>${cat ? "Tous les sujets" : "Le fil"}</h2><small id="feedCount"></small></div>
+    <div class="page-head" style="margin-bottom:12px">
+      <div class="tabs" style="margin:0;flex:1">
+        ${[["pour_vous", "ai", S.user ? "Pour vous" : "Sélection"], ["recent", "clock", "Les plus récents"], ["tendances", "trend", "Les plus couverts"]].map(([k, i, l]) => `<button class="tab ${S.feedMode === k ? "active" : ""}" data-act="mode" data-mode="${k}" aria-pressed="${S.feedMode === k}">${ico(i)}${l}</button>`).join("")}
       </div>
-      <select class="input" id="mediaSel" style="width:auto" aria-label="Filtrer par format">
+      <label class="sr" for="mediaSel">Filtrer par format</label>
+      <select class="input" id="mediaSel" style="width:auto">
         <option value="">Tous les formats</option>${Object.entries(MEDIA).map(([k, v]) => `<option value="${k}" ${S.feedMedia === k ? "selected" : ""}>${v[1]}</option>`).join("")}
       </select>
     </div>
-    <div class="chips" style="margin-bottom:18px"><button class="chip ${!S.feedCat ? "active" : ""}" data-act="cat" data-cat="">Toutes les rubriques</button>${S.cats.map((c) => `<button class="chip ${S.feedCat === c.slug ? "active" : ""}" data-act="cat" data-cat="${c.slug}">${esc(c.name)}</button>`).join("")}</div>
     <div id="feedInfo"></div>
-    <div id="feedList">${skeleton()}</div>
-    <div class="row" style="justify-content:center;margin-top:20px"><button class="btn" id="moreBtn" hidden>Afficher plus</button></div>`;
-  $("#mediaSel").onchange = (e) => { S.feedMedia = e.target.value; loadFeed(true); };
+    <div class="feed-wrap">
+      <div><div id="feedList">${skeleton()}</div>
+        <div class="row" style="justify-content:center;margin-top:24px"><button class="btn" id="moreBtn" hidden>Afficher plus de sujets</button></div></div>
+      <aside class="rail stack" id="rail" aria-label="Tendances"></aside>
+    </div>`;
+  $("#mediaSel").onchange = (e) => { S.feedMedia = e.target.value; pageFeed(); };
   loadFeed(true);
+  if (!cat) loadHomeExtras();
+}
+const byline = (a) => `<div class="byline"><strong>${esc(a.source_name)}</strong><span title="${esc(fmtDate(a.published_at))}">${ago(a.published_at)}</span>${demoBadge(a)}</div>`;
+function leadStory(a) {
+  const n = new Set((a.others || []).map((o) => o.source_name)).size + 1;
+  return `<article class="lead-story">
+    <a class="frame ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a)}</a>
+    <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
+    <h2 style="font-size:clamp(1.9rem,3.8vw,3rem);margin:6px 0 10px;line-height:1.08"><a href="/article/${a.id}" style="text-decoration:none">${esc(a.title)}</a></h2>
+    <p class="sum">${esc(a.summary)}</p>
+    <div class="row">${byline(a)}${n > 1 ? `<a href="/sujet/${a.cluster_id}" class="small" style="font-weight:600">${spectre(n)} Comparer</a>` : ""}</div>
+  </article>`;
+}
+function sideStory(a) {
+  const n = new Set((a.others || []).map((o) => o.source_name)).size + 1;
+  return `<article class="side-story"><div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
+    <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>${byline(a)}${n > 1 ? `<div style="margin-top:6px"><a href="/sujet/${a.cluster_id}" style="text-decoration:none">${spectre(n)}</a></div>` : ""}</article>`;
+}
+async function loadHomeExtras() {
+  const t = await get("/api/trends").catch(() => null);
+  if (!t || !$("#rail")) return;
+  const multi = t.topics.filter((x) => x.source_count > 1).slice(0, 6);
+  if ($("#topics") && multi.length && !S.feedMedia) {
+    $("#topics").innerHTML = `<div class="sec-title"><h2>Un événement, plusieurs regards</h2><small>Chaque barre représente un média</small></div>
+      <div class="topics">${multi.map((c) => `<article class="topic"><div class="row" style="justify-content:space-between">${c.category_name ? `<span class="kicker">${esc(c.category_name)}</span>` : "<span></span>"}${spectre(c.source_count)}</div>
+        <h3><a href="/sujet/${c.id}">${esc(c.title)}</a></h3><a class="go" href="/sujet/${c.id}">Comparer les ${c.size} articles</a></article>`).join("")}</div>`;
+  }
+  $("#rail").innerHTML = `<div class="panel"><h3>Les mots du moment</h3><ol class="rank">${t.keywords.slice(0, 8).map((k) => `<li><a href="/recherche?q=${encodeURIComponent(k.word)}&dedup=1">${esc(k.word)}</a></li>`).join("")}</ol></div>
+    <div class="panel"><h3>Le digest du jour</h3><p class="small muted">L'essentiel en quelques minutes, à partir de plusieurs sources citées.</p><a class="btn sm" href="/digest">${ico("digest")} Lire le digest</a></div>
+    <div class="panel"><h3>Comment lire Prisme</h3><p class="small muted">Le spectre indique combien de médias couvrent un même événement. C'est une mesure de couverture, pas une preuve de véracité.</p><a class="small" href="/methode">Notre méthode</a></div>`;
 }
 let feedOffset = 0;
 async function loadFeed(reset) {
   if (reset) feedOffset = 0;
   const qs = new URLSearchParams({ mode: S.feedMode, category: S.feedCat, media: S.feedMedia, offset: feedOffset, limit: 24 });
-  const data = await get("/api/feed?" + qs);
+  let data;
+  try { data = await get("/api/feed?" + qs); }
+  catch (e) { const l = $("#feedList"); if (l) l.innerHTML = `<div class="alert-line bad">${ico("alert")}<span>${esc(e.message)}</span></div>`; return; }
   const list = $("#feedList");
   if (!list) return;
-  if (reset) list.innerHTML = cards(data.items); else list.querySelector(".feed")?.insertAdjacentHTML("beforeend", data.items.map((a) => (CARD_CACHE.set(a.id, a), card(a))).join(""));
+  let items = data.items;
+  if (reset) {
+    const front = $("#front");
+    const useFront = !S.feedMedia && S.feedMode === "pour_vous" && items.length >= 5;
+    if (useFront) {
+      items.forEach((a) => CARD_CACHE.set(a.id, a));
+      const lead = items.find((a) => safeUrl(a.image_url)) || items[0];
+      const rest = items.filter((a) => a !== lead);
+      front.innerHTML = `<section class="front" aria-label="À la une">${leadStory(lead)}<div class="side-col">${rest.slice(0, 4).map(sideStory).join("")}</div></section>`;
+      items = rest.slice(4);
+    } else front.innerHTML = "";
+    if (!data.total) {
+      front.innerHTML = "";
+      list.innerHTML = `<div class="empty">${ico("refresh")}<h2>Les premiers articles arrivent</h2><p>La collecte des flux est en cours. Revenez dans une minute.</p></div>`;
+    } else list.innerHTML = cards(items);
+  } else list.querySelector(".feed")?.insertAdjacentHTML("beforeend", items.map((a) => (CARD_CACHE.set(a.id, a), card(a))).join(""));
   feedOffset += data.items.length;
   $("#moreBtn").hidden = feedOffset >= data.total;
   $("#moreBtn").onclick = () => loadFeed(false);
+  $("#feedCount").textContent = data.total ? `${data.total} sujets` : "";
   const info = $("#feedInfo");
   if (data.profile && S.feedMode === "pour_vous") {
     const d = data.profile.diversity_index;
-    info.innerHTML = `<div class="alert-line ${d >= 60 ? "ok" : d >= 35 ? "info" : "warn"}" style="margin-bottom:16px">${ico("globe")}<span><b>Indice de diversité de vos lectures : ${d}/100.</b>
-      ${d >= 60 ? "Vos lectures sont variées." : "Vos lectures se concentrent sur peu de thèmes : Prisme insère des articles « Découverte » pour éviter la bulle de filtres."}
-      Part réservée à la découverte : ${Math.round((S.user.diversity_ratio || 0.25) * 100)} % — <a href="#/parametres">ajuster</a>.</span></div>`;
-  } else if (!S.user && S.feedMode === "pour_vous") {
-    info.innerHTML = `<div class="alert-line info" style="margin-bottom:16px">${ico("info")}<span>Classement non personnalisé (fraîcheur, fiabilité, couverture). <a href="#/connexion">Connectez-vous</a> pour un fil adapté à vos centres d'intérêt.</span></div>`;
+    info.innerHTML = `<div class="alert-line ${d >= 60 ? "ok" : "info"}" style="margin-bottom:16px">${ico("globe")}<span><b>Diversité de vos lectures : ${d}/100.</b>
+      ${d >= 60 ? "Vos lectures sont variées." : "Vos lectures se concentrent sur peu de thèmes : Prisme insère des articles « Découverte »."}
+      Part réservée à la découverte : ${Math.round((S.user.diversity_ratio || 0.25) * 100)} %. <a href="/parametres">Ajuster</a></span></div>`;
   } else info.innerHTML = "";
 }
 
@@ -259,52 +328,55 @@ async function pageArticle(id) {
   main().innerHTML = skeleton(2);
   const a = await get(`/api/articles/${id}`);
   CARD_CACHE.set(a.id, a);
+  setTitle(`${a.title} — ${a.source_name}`);
+  if (a.path && location.pathname !== a.path) history.replaceState(null, "", a.path);
   const src = a.source || {};
   const f = a.freshness;
+  const nSources = new Set(a.others.map((o) => o.source_name)).size + 1;
   main().innerHTML = `
   <div class="cols article">
     <div>
-      <div class="row no-print" style="margin-bottom:12px"><a class="btn sm ghost" href="javascript:history.back()">← Retour</a><span class="grow" style="flex:1"></span>
-        <button class="btn sm" data-act="reader">${ico("reader")} Mode lecture épuré</button><button class="btn sm" onclick="window.print()">${ico("print")} Imprimer / PDF</button></div>
-      <div class="row" style="gap:6px;margin-bottom:10px">${catBadge(a)}${mediaBadge(a.media_type)}${freshBadge(f)}${statusBadge(a.verification_status, a.verification_score)}${demoBadge(a)}</div>
+      <div class="row no-print" style="margin-bottom:12px"><button class="btn sm ghost" data-act="back">← Retour</button><span class="grow" style="flex:1"></span>
+        <button class="btn sm" data-act="reader">${ico("reader")} Mode lecture épuré</button><button class="btn sm" data-act="print">${ico("print")} Imprimer / PDF</button></div>
+      <div class="row" style="gap:6px 10px;margin-bottom:10px">${catBadge(a)}${mediaBadge(a.media_type)}${freshBadge(f)}${statusBadge(a.verification_status, a.verification_label)}${demoBadge(a)}</div>
       <h1>${esc(a.title)}</h1>
       <div class="meta" style="margin:10px 0 16px;font-size:.88rem"><strong>${esc(a.source_name)}</strong>${a.author ? `<span>par ${esc(a.author)}</span>` : ""}
         <span>${ico("clock")} Publié le ${fmtDate(a.published_at)} (${esc(f.age)})</span><span>· Collecté le ${fmtDate(a.first_seen_at)}</span><span>· ${a.reading_time} min de lecture</span></div>
       ${f.warning ? `<div class="alert-line ${f.recirculating ? "bad" : "warn"}" style="margin-bottom:12px">${ico("alert")}<span><b>Indicateur de fraîcheur :</b> ${esc(f.warning)}</span></div>` : ""}
       ${a.correction_note ? `<div class="alert-line ok" style="margin-bottom:12px">${ico("check")}<span><b>Correction :</b> ${esc(a.correction_note)}</span></div>` : ""}
-      ${a.verification_status === "conteste" ? `<div class="alert-line bad" style="margin-bottom:12px">${ico("alert")}<span><b>Prudence :</b> certaines affirmations de ce contenu sont contredites par d'autres sources fiables. Consultez l'onglet « Vérification ».</span></div>` : ""}
+      ${a.verification_status === "conteste" ? `<div class="alert-line bad" style="margin-bottom:12px">${ico("alert")}<span><b>${esc(a.verification_label)} :</b> d'autres médias rapportent une version différente. Consultez l'onglet « Recoupement ».</span></div>` : ""}
       ${a.media_type === "podcast" && a.media_url ? `<button class="btn primary" data-act="play" data-id="${a.id}" style="margin-bottom:14px">${ico("play")} Écouter le podcast</button>` : ""}
+      ${safeUrl(a.image_url) ? `<img class="hero-img" src="${esc(safeUrl(a.image_url))}" alt="" referrerpolicy="no-referrer">` : ""}
       <div class="content" id="articleContent">${a.paragraphs.map((p) => `<p>${esc(p)}</p>`).join("")}</div>
       <div class="row no-print" style="margin:6px 0 22px">
-        ${a.url ? `<a class="btn primary" href="${esc(a.url)}" target="_blank" rel="noopener">${ico("ext")} Lire l'article original sur ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
+        ${safeUrl(a.url) ? `<a class="btn primary" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} Lire l'article original sur ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
         <button class="btn" data-act="fav" data-id="${a.id}">${ico("star")} ${S.favs.has(a.id) ? "Retirer des favoris" : "Ajouter aux favoris"}</button>
         <button class="btn" data-act="share" data-id="${a.id}">${ico("share")} Partager</button>
         <button class="btn danger" data-act="report" data-id="${a.id}">${ico("flag")} Signaler une erreur</button>
       </div>
       <div class="panel no-print">
         <div class="tabs" id="toolTabs">
-          ${[["summary", "ai", "Résumé IA"], ["verify", "shield", "Vérification"], ["translate", "globe", "Traduction"], ["simplify", "text", "Simplification"], ["why", "help", "Pourquoi cet article ?"]].map(([k, i, l], n) => `<button class="tab ${n === 0 ? "active" : ""}" data-act="tool" data-tool="${k}">${ico(i)}${l}</button>`).join("")}
-          ${a.others.length ? `<a class="tab" href="#/sujet/${a.cluster_id}">${ico("columns")}Comparer ${a.others.length + 1} sources</a>` : ""}
+          ${[["summary", "ai", "Résumé automatique"], ["verify", "shield", "Recoupement"], ["translate", "globe", "Traduction"], ["simplify", "text", "Simplification"], ["why", "help", "Pourquoi cet article ?"]].map(([k, i, l], n) => `<button class="tab ${n === 0 ? "active" : ""}" data-act="tool" data-tool="${k}">${ico(i)}${l}</button>`).join("")}
+          ${a.others.length ? `<a class="tab" href="/sujet/${a.cluster_id}">${ico("columns")}Comparer les ${a.others.length + 1} articles</a>` : ""}
         </div>
         <div id="toolBody"></div>
       </div>
     </div>
     <aside class="tools-col stack">
       <div class="panel">
-        <h3>${ico("db")} À propos de la source</h3>
-        <div class="row between"><b>${esc(src.name)}</b>${relBadge(src.reliability, src.certified)}</div>
-        <div class="track" style="margin:10px 0"><i style="width:${src.reliability}%;background:${src.reliability >= 75 ? "var(--ok)" : src.reliability >= 50 ? "var(--info)" : "var(--bad)"}"></i></div>
-        <div class="small muted">${esc(src.reliability_note || "")}</div>
-        <div class="small" style="margin-top:8px">Type : ${esc(src.kind)} · Pays : ${esc(src.country || "—")} · Langue : ${esc((src.language || "").toUpperCase())}</div>
+        <h3>${ico("db")} La source</h3>
+        <dl class="facts"><dt>Média</dt><dd><b>${esc(src.name)}</b></dd><dt>Type</dt><dd>${esc(src.kind)}</dd><dt>Pays</dt><dd>${esc(src.country || "Non renseigné")}</dd><dt>Langue</dt><dd>${esc((src.language || "").toUpperCase())}</dd><dt>Publié</dt><dd>${fmtDate(a.published_at)}</dd><dt>Collecté</dt><dd>${fmtDate(a.first_seen_at)}</dd></dl>
+        ${relBadge(src.reliability, src.certified, src.is_demo)}${src.is_demo ? `<div class="small muted" style="margin-top:8px">${esc(src.reliability_note || "")}</div>` : ""}
       </div>
       <div class="panel">
-        <h3>${ico("shield")} Synthèse de vérification</h3>
-        <div class="row"><div class="score-ring" style="--v:${a.verification_score || 0};--c:${a.verification_status === "verifie" ? "var(--ok)" : a.verification_status === "conteste" ? "var(--bad)" : a.verification_status === "partiel" ? "var(--info)" : "var(--warn)"}" data-v="${a.verification_score ?? "–"}"></div>
-          <div>${statusBadge(a.verification_status)}<div class="small muted" style="margin-top:4px">${a.claims.length} affirmation(s) analysée(s)</div></div></div>
-        <div class="small" style="margin-top:12px">Tonalité : <b>${esc(a.tone.label)}</b><br>Lisibilité : <b>${a.readability.score}/100</b> (${esc(a.readability.level)})</div>
+        <h3>${ico("layers")} Couverture</h3>
+        <div style="margin-bottom:8px">${spectre(nSources)}</div>
+        <div>${statusBadge(a.verification_status, a.verification_label)}</div>
+        <p class="small muted" style="margin:10px 0 0">Ce statut décrit combien de médias en parlent, pas si le fait est vrai. <a href="/methode">Notre méthode</a></p>
+        <div class="small" style="margin-top:10px">Tonalité : <b>${esc(a.tone.label)}</b><br>Lisibilité : <b>${a.readability.score}/100</b> (${esc(a.readability.level)})</div>
       </div>
-      ${a.others.length ? `<div class="panel"><h3>${ico("layers")} Même sujet ailleurs</h3>${a.others.map((o) => `<div style="margin-bottom:10px"><a href="#/article/${o.id}">${esc(o.title)}</a><div class="small muted">${esc(o.source_name)} · ${ago(o.published_at)}</div></div>`).join("")}<a class="btn sm" href="#/sujet/${a.cluster_id}">${ico("columns")} Comparer les traitements</a></div>` : ""}
-      <div class="panel"><h3>${ico("hash")} Mots-clés</h3><div class="chips">${a.keywords.map((k) => `<a class="chip" href="#/recherche?q=${encodeURIComponent(k)}">${esc(k)}</a>`).join("")}</div></div>
+      ${a.others.length ? `<div class="panel"><h3>${ico("layers")} Même sujet ailleurs</h3>${a.others.map((o) => `<div style="margin-bottom:10px"><a href="/article/${o.id}">${esc(o.title)}</a><div class="small muted">${esc(o.source_name)} · ${ago(o.published_at)}</div></div>`).join("")}<a class="btn sm" href="/sujet/${a.cluster_id}">${ico("columns")} Comparer les traitements</a></div>` : ""}
+      <div class="panel"><h3>${ico("hash")} Mots-clés</h3><div class="chips">${a.keywords.map((k) => `<a class="chip" href="/recherche?q=${encodeURIComponent(k)}">${esc(k)}</a>`).join("")}</div></div>
       ${a.reports.length ? `<div class="panel"><h3>${ico("flag")} Signalements (${a.reports.length})</h3>${a.reports.map((r) => `<div class="small" style="margin-bottom:8px">${reportStatus(r.status)} ${esc(REASONS[r.reason])}${r.admin_response ? `<div class="muted">${esc(r.admin_response)}</div>` : ""}</div>`).join("")}</div>` : ""}
     </aside>
   </div>`;
@@ -321,11 +393,11 @@ async function tool(name) {
     if (name === "summary") {
       const s = await get(`/api/articles/${a.id}/summary`);
       box.innerHTML = s.sentences.length ? `
-        <h3>Résumé automatique avec citations vérifiables</h3>
+        <div class="row between" style="margin-bottom:8px"><h3 style="margin:0">Résumé généré automatiquement</h3><span class="badge b-info">${ico("ai")} Extraction automatique</span></div>
         <ol class="sum-list">${s.sentences.map((x) => `<li>${esc(x.text)}<button class="cite" data-act="cite" data-n="${x.cite}" title="Voir la source">${x.cite}</button></li>`).join("")}</ol>
         <hr class="sep"><b class="small">Sources citées</b>
-        <ol class="small" id="citeList">${s.sources.map((r) => `<li id="cite-${r.n}"><b>${esc(r.source)}</b> — <a href="#/article/${r.article_id}">${esc(r.title)}</a> (${fmtDate(r.published_at, false)})${r.url ? ` · <a href="${esc(r.url)}" target="_blank" rel="noopener">original ${ico("ext")}</a>` : ""}</li>`).join("")}</ol>
-        <div class="small muted">${ico("info")} ${esc(s.method)} Chaque phrase est extraite telle quelle d'une source identifiée : aucune information n'est inventée.</div>` : empty("Texte trop court pour produire un résumé.");
+        <ol class="small" id="citeList">${s.sources.map((r) => `<li id="cite-${r.n}"><b>${esc(r.source)}</b> — <a href="/article/${r.article_id}">${esc(r.title)}</a> (${fmtDate(r.published_at, false)})${safeUrl(r.url) ? ` · <a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">original ${ico("ext")}</a>` : ""}</li>`).join("")}</ol>
+        <div class="small muted">${ico("info")} ${esc(s.method)} Chaque phrase est copiée telle quelle depuis la source citée : le logiciel la choisit mais ne rédige rien. Une phrase extraite peut rester inexacte : consultez l'original.</div>` : empty("Texte trop court pour produire un résumé.");
     } else if (name === "verify") {
       renderClaims(box, a.claims, a);
     } else if (name === "translate") {
@@ -355,7 +427,7 @@ async function tool(name) {
         <div class="small muted">${ico("info")} Méthode : découpage des phrases longues et remplacement lexical par un glossaire (base de données). Indice : formule de Kandel & Moles.</div>`;
     } else if (name === "why") {
       box.innerHTML = `<div class="why" style="background:none;padding:0">${whyHtml(a.why)}</div>
-        <p class="small muted" style="margin-top:12px">${ico("info")} Transparence : Prisme n'utilise aucun critère caché. Le score combine six critères pondérés, et une part du fil est réservée à des sujets hors de vos habitudes. Vous pouvez modifier vos intérêts dans les <a href="#/parametres">paramètres</a> ou effacer votre historique à tout moment.</p>`;
+        <p class="small muted" style="margin-top:12px">${ico("info")} Transparence : Prisme n'utilise aucun critère caché. Le score combine six critères pondérés, et une part du fil est réservée à des sujets hors de vos habitudes. Vous pouvez modifier vos intérêts dans les <a href="/parametres">paramètres</a> ou effacer votre historique à tout moment.</p>`;
     }
   } catch (e) { box.innerHTML = `<div class="alert-line bad">${ico("alert")}${esc(e.message)}</div>`; }
 }
@@ -363,53 +435,54 @@ async function tool(name) {
 const CLAIM_TYPES = { chiffre: "Donnée chiffrée", citation: "Citation", attribution: "Attribution", causalite: "Lien de causalité", absolu: "Formulation absolue", rumeur: "Formulation conditionnelle / rumeur" };
 function renderClaims(box, claims, a) {
   box.innerHTML = `
-    <div class="row between" style="margin-bottom:12px"><h3 style="margin:0">Affirmations détectées et preuves</h3><button class="btn sm" data-act="reverify" data-id="${a.id}">${ico("refresh")} Relancer l'analyse</button></div>
-    <p class="small muted" style="margin-top:0">L'IA repère les phrases contenant des chiffres, citations, attributions, liens de causalité ou formulations douteuses, puis recherche des passages correspondants dans les autres sources agrégées (contemporaines et indépendantes).</p>
+    <div class="row between" style="margin-bottom:12px"><h3 style="margin:0">Passages proches chez d'autres médias</h3>${S.user && S.user.role === "admin" ? `<button class="btn sm" data-act="reverify" data-id="${a.id}">${ico("refresh")} Relancer l'analyse</button>` : ""}</div>
+    <p class="small muted" style="margin-top:0">Le logiciel repère les phrases contenant des chiffres, citations ou attributions, puis cherche des formulations proches dans les autres médias suivis. Un passage proche indique une reprise, pas une preuve.</p>
     ${claims.length ? claims.map((c) => `
       <div class="claim">
-        <div class="row between"><div class="chips">${c.claim_types.split(",").map((t) => `<span class="badge">${esc(CLAIM_TYPES[t] || t)}</span>`).join("")}</div>${statusBadge(c.status)}</div>
+        <div class="row between"><div class="chips">${c.claim_types.split(",").map((t) => `<span class="badge">${esc(CLAIM_TYPES[t] || t)}</span>`).join("")}</div>${statusBadge(c.status, c.status_label)}</div>
         <p style="margin:8px 0"><q>${esc(c.sentence)}</q></p>
-        <div class="small"><b>Analyse :</b> ${esc(c.rationale)} <span class="muted">(confiance ${c.confidence} %)</span></div>
-        ${c.evidences.map((e) => `<div class="ev ${e.stance}"><b>${e.stance === "soutient" ? "✔ Confirme" : e.stance === "contredit" ? "✖ Contredit" : "• Contexte"}</b> — <a href="#/article/${e.article_id}">${esc(e.source_name)}</a> <span class="muted">(${fmtDate(e.published_at, false)}, similarité ${Math.round(e.similarity * 100)} %)</span><br>« ${esc(e.excerpt)} »</div>`).join("")}
-      </div>`).join("") : empty("Aucune affirmation factuelle détectée dans ce contenu.", "shield")}
-    <div class="alert-line info small" style="margin-top:12px">${ico("info")}<span>Vérification <b>assistée</b> : l'outil aide le lecteur à exercer son esprit critique mais ne remplace pas le travail d'un journaliste vérificateur. Vous avez repéré une erreur ? <a href="#" data-act="report" data-id="${a.id}">Signalez-la</a>.</span></div>`;
+        <div class="small">${esc(c.rationale)}</div>
+        ${c.evidences.map((e) => `<div class="ev ${e.stance}"><b>${e.stance === "soutient" ? "Formulation proche" : e.stance === "contredit" ? "Version différente" : "Contexte"}</b> — <a href="/article/${e.article_id}">${esc(e.source_name)}</a> <span class="muted">(${fmtDate(e.published_at, false)}, similarité ${Math.round(e.similarity * 100)} %)</span><br>« ${esc(e.excerpt)} »</div>`).join("")}
+      </div>`).join("") : empty("Aucune phrase de ce type dans le texte disponible : le flux fournit souvent un simple extrait.", "shield")}
+    <div class="alert-line info small" style="margin-top:12px">${ico("info")}<span>Cet outil aide à comparer, il ne remplace pas le travail d'un journaliste vérificateur. Vous avez repéré une erreur ? <a href="#" data-act="report" data-id="${a.id}">Signalez-la</a>.</span></div>`;
 }
 
 async function pageCompare(cid) {
   main().innerHTML = skeleton(2);
   const c = await get(`/api/clusters/${cid}`);
   const s = c.summary;
+  setTitle(`${c.cluster.label} : ce qu'en disent ${c.cluster.source_count} médias`);
   const tone = { "neutre / factuel": "", positif: "b-ok", négatif: "b-warn", alarmiste: "b-warn", sensationnaliste: "b-bad" };
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("columns")} Comparaison des sources</h1><p class="lead">${esc(c.cluster.label)}</p></div>
-      <div class="row"><span class="badge b-info">${c.articles.length} articles · ${c.cluster.source_count} médias</span></div></div>
-    ${s && s.sentences.length ? `<div class="panel"><h2>${ico("ai")} Synthèse multi-sources</h2><ol class="sum-list">${s.sentences.map((x) => `<li>${esc(x.text)} <span class="cite">${x.cite}</span></li>`).join("")}</ol>
+    <div class="page-head"><div><span class="kicker">Comparaison</span><h1>${esc(c.cluster.label)}</h1></div>
+      <div class="row">${spectre(c.cluster.source_count)}<span class="small muted">${c.articles.length} articles</span></div></div>
+    ${s && s.sentences.length ? `<div class="panel"><div class="row between"><h2 style="margin:0 0 10px">Résumé automatique</h2><span class="badge b-info">${ico("ai")} Extraction automatique</span></div><ol class="sum-list">${s.sentences.map((x) => `<li>${esc(x.text)} <span class="cite">${x.cite}</span></li>`).join("")}</ol>
       <div class="small muted">${s.sources.map((r) => `[${r.n}] ${esc(r.source)}`).join(" · ")}</div></div>` : ""}
     <div class="grid g2" style="margin-top:16px">
-      <div class="panel"><h3>${ico("check")} Points communs (consensus)</h3>${c.common_keywords.length ? `<div class="chips">${c.common_keywords.map((k) => `<span class="chip">${esc(k)}</span>`).join("")}</div>` : `<span class="muted small">Peu de vocabulaire commun.</span>`}
+      <div class="panel"><h3>${ico("check")} Vocabulaire commun</h3>${c.common_keywords.length ? `<div class="chips">${c.common_keywords.map((k) => `<span class="chip">${esc(k)}</span>`).join("")}</div>` : `<span class="muted small">Peu de vocabulaire commun.</span>`}
         <p class="small muted" style="margin-bottom:0">Termes présents dans la majorité des articles.</p></div>
-      <div class="panel"><h3>${ico("alert")} Divergences chiffrées</h3>${c.divergences.length ? c.divergences.map((d) => `<div class="small" style="margin-bottom:8px"><b>Unité « ${esc(d.unit)} »</b> : ${d.values.map((v) => `<span class="badge ${d.values.length > 1 ? "b-warn" : ""}">${esc(v.value)}</span> <span class="muted">(${esc(v.sources.join(", "))})</span>`).join(" — ")}</div>`).join("") : `<span class="muted small">Aucune divergence chiffrée détectée : les médias rapportent les mêmes chiffres.</span>`}</div>
+      <div class="panel"><h3>${ico("alert")} Divergences chiffrées</h3>${c.divergences.length ? c.divergences.map((d) => `<div class="small" style="margin-bottom:8px"><b>Unité « ${esc(d.unit)} »</b> : ${d.values.map((v) => `<span class="badge ${d.values.length > 1 ? "b-warn" : ""}">${esc(v.value)}</span> <span class="muted">(${esc(v.sources.join(", "))})</span>`).join(" — ")}</div>`).join("") : `<span class="muted small">Aucun écart de chiffres détecté dans les textes disponibles.</span>`}</div>
     </div>
     <h2 style="margin-top:22px">Traitement par média</h2>
     <div class="compare-grid">${c.articles.map((a) => `
       <div class="cmp-col">
-        <div class="row between"><b>${esc(a.source)}</b>${relBadge(a.reliability, a.certified)}</div>
-        <a href="#/article/${a.id}" style="font-weight:600">${esc(a.title)}</a>
-        <div class="small muted">${a.rank === 1 ? "🥇 Premier à publier · " : `${a.rank}ᵉ à publier · `}${fmtDate(a.published_at)}</div>
-        <div class="row" style="gap:6px">${statusBadge(a.verification_status)}<span class="badge ${tone[a.tone.label] || ""}">Ton : ${esc(a.tone.label)}</span></div>
+        <div class="row between"><b>${esc(a.source)}</b>${relBadge(a.reliability, a.certified, a.is_demo)}</div>
+        <a href="/article/${a.id}" style="font-weight:600">${esc(a.title)}</a>
+        <div class="small muted">${a.rank === 1 ? "Premier à publier · " : `${a.rank}ᵉ à publier · `}${fmtDate(a.published_at)}</div>
+        <div class="row" style="gap:6px">${a.verification_status === "conteste" ? statusBadge(a.verification_status, a.verification_label) : ""}<span class="badge ${tone[a.tone.label] || ""}">Ton : ${esc(a.tone.label)}</span></div>
         <div class="small">Longueur : <b>${a.word_count} mots</b> · Lisibilité : <b>${a.readability.score}/100</b></div>
         ${a.numbers.length ? `<div class="small">Chiffres cités : ${a.numbers.map((n) => `<span class="badge">${esc(n)}</span>`).join(" ")}</div>` : ""}
         ${a.unique_keywords.length ? `<div class="small">Angle spécifique : ${a.unique_keywords.map((k) => `<span class="chip">${esc(k)}</span>`).join(" ")}</div>` : ""}
-        ${a.url ? `<a class="small" href="${esc(a.url)}" target="_blank" rel="noopener">${ico("ext")} Source originale</a>` : ""}
+        ${safeUrl(a.url) ? `<a class="small" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} Lire l'original</a>` : ""}
       </div>`).join("")}</div>
-    <div class="panel" style="margin-top:18px"><h3>${ico("clock")} Chronologie de publication</h3><div class="timeline">${c.articles.map((a) => `<div class="tl-item"><b>${fmtDate(a.published_at)}</b> — ${esc(a.source)} : <a href="#/article/${a.id}">${esc(a.title)}</a></div>`).join("")}</div></div>`;
+    <div class="panel" style="margin-top:18px"><h3>${ico("clock")} Chronologie de publication</h3><div class="timeline">${c.articles.map((a) => `<div class="tl-item"><b>${fmtDate(a.published_at)}</b> — ${esc(a.source)} : <a href="/article/${a.id}">${esc(a.title)}</a></div>`).join("")}</div></div>`;
 }
 
 async function pageSearch(params) {
   const p = new URLSearchParams(params || "");
   const srcs = await get("/api/sources");
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("search")} Recherche avancée</h1><p class="lead">Retrouvez une information par mots-clés, date précise, auteur, source, format ou statut de vérification.</p></div></div>
+    <div class="page-head"><div><h1>${ico("search")} Recherche avancée</h1><p class="lead">Par mots-clés, date, auteur, média, format ou niveau de couverture.</p></div></div>
     <form class="panel" id="searchForm">
       <div class="grid g4">
         <label class="f" style="grid-column:span 2"><span>Mots-clés</span><input class="input" name="q" value="${esc(p.get("q") || "")}" placeholder="ex. carburant, Union africaine…"></label>
@@ -419,18 +492,18 @@ async function pageSearch(params) {
         <label class="f"><span>Au</span><input class="input" type="date" name="to" value="${esc(p.get("to") || "")}"></label>
         <label class="f"><span>Rubrique</span><select class="input" name="category"><option value="">Toutes</option>${S.cats.map((c) => `<option value="${c.slug}" ${p.get("category") === c.slug ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
         <label class="f"><span>Format</span><select class="input" name="media"><option value="">Tous</option>${Object.entries(MEDIA).map(([k, v]) => `<option value="${k}" ${p.get("media") === k ? "selected" : ""}>${v[1]}</option>`).join("")}</select></label>
-        <label class="f"><span>Vérification</span><select class="input" name="status"><option value="">Tous statuts</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${p.get("status") === k ? "selected" : ""}>${v[2]}</option>`).join("")}</select></label>
+        <label class="f"><span>Couverture</span><select class="input" name="status"><option value="">Toutes</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${p.get("status") === k ? "selected" : ""}>${v[2]}</option>`).join("")}</select></label>
         <label class="f"><span>Langue</span><select class="input" name="lang"><option value="">Toutes</option><option value="fr" ${p.get("lang") === "fr" ? "selected" : ""}>Français</option><option value="en" ${p.get("lang") === "en" ? "selected" : ""}>Anglais</option></select></label>
-        <label class="f"><span>Trier par</span><select class="input" name="sort">${[["date", "Plus récent"], ["ancien", "Plus ancien"], ["fiabilite", "Fiabilité de la source"], ["verification", "Score de vérification"]].map(([k, l]) => `<option value="${k}" ${p.get("sort") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label class="f"><span>Trier par</span><select class="input" name="sort">${[["date", "Plus récent"], ["ancien", "Plus ancien"], ["verification", "Nombre de médias"]].map(([k, l]) => `<option value="${k}" ${p.get("sort") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
         <label class="f" style="display:flex;align-items:center;gap:8px;margin-top:26px"><input type="checkbox" name="dedup" value="1" ${p.get("dedup") === "1" ? "checked" : ""}> Masquer les doublons</label>
       </div>
-      <div class="row"><button class="btn primary">${ico("search")} Rechercher</button><button type="reset" class="btn ghost" onclick="location.hash='#/recherche'">Réinitialiser</button></div>
+      <div class="row"><button class="btn primary">${ico("search")} Rechercher</button><a class="btn ghost" href="/recherche">Réinitialiser</a></div>
     </form>
     <div id="results" style="margin-top:18px"></div>`;
   $("#searchForm").onsubmit = (e) => {
     e.preventDefault();
     const fd = new URLSearchParams([...new FormData(e.target)].filter(([, v]) => v));
-    location.hash = "#/recherche?" + fd;
+    nav("/recherche?" + fd);
   };
   if ([...p.keys()].length) {
     $("#results").innerHTML = skeleton(3);
@@ -447,10 +520,10 @@ async function pageTrends() {
     <div class="cols">
       <div class="stack">
         <h2>Sujets les plus couverts</h2>
-        ${t.topics.map((c, i) => `<div class="panel row" style="gap:16px;align-items:flex-start"><div style="font-size:1.6rem;font-weight:800;color:var(--primary);width:34px">${i + 1}</div>
-          <div style="flex:1"><a href="#/article/${c.article_id}" style="font-weight:700;font-size:1.05rem;color:var(--text)">${esc(c.title)}</a>
-          <div class="meta" style="margin-top:6px">${c.category_name ? `<span class="badge b-cat" style="background:${esc(c.category_color)}">${esc(c.category_name)}</span>` : ""}<span>${c.source_count} média(s) · ${c.size} article(s)</span></div></div>
-          <div class="row">${c.size > 1 ? `<a class="btn sm" href="#/sujet/${c.id}">${ico("columns")} Comparer</a>` : ""}<button class="btn sm" data-act="post" data-id="${c.article_id}">${ico("hash")} Créer un post</button></div></div>`).join("") || empty("Aucune tendance pour le moment.")}
+        ${t.topics.map((c, i) => `<div class="panel row" style="gap:16px;align-items:flex-start"><div style="font-family:var(--serif);font-size:1.8rem;color:var(--accent);width:34px">${i + 1}</div>
+          <div style="flex:1"><a href="/article/${c.article_id}" style="font-weight:700;font-size:1.05rem;color:var(--text)">${esc(c.title)}</a>
+          <div class="meta" style="margin-top:6px">${c.category_name ? `<span class="kicker">${esc(c.category_name)}</span>` : ""}${spectre(c.source_count)}<span>${c.size} article(s)</span></div></div>
+          <div class="row">${c.size > 1 ? `<a class="btn sm" href="/sujet/${c.id}">${ico("columns")} Comparer</a>` : ""}<button class="btn sm" data-act="post" data-id="${c.article_id}">${ico("hash")} Créer un post</button></div></div>`).join("") || empty("Aucune tendance pour le moment.")}
       </div>
       <aside class="stack">
         <div class="panel"><h3>${ico("hash")} Mots-clés et hashtags</h3><p class="small muted">Classés selon le nombre de médias différents qui les emploient.</p>
@@ -466,12 +539,12 @@ async function pageDigest() {
   const today = new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const mail = `mailto:?subject=${encodeURIComponent("Digest Prisme — " + today)}&body=${encodeURIComponent(d.items.map((x, i) => `${i + 1}. ${x.article.title} (${x.article.source_name})\n${x.summary.sentences.map((s) => "   - " + s.text).join("\n")}`).join("\n\n"))}`;
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("digest")} Digest du ${esc(today)}</h1><p class="lead">L'essentiel de l'actualité en quelques minutes : les sujets les plus couverts, résumés à partir de plusieurs sources, sans les contenus contestés.</p></div>
-      <div class="row no-print"><button class="btn" onclick="window.print()">${ico("print")} Exporter en PDF</button><a class="btn primary" href="${mail}">${ico("share")} Envoyer par e-mail</a></div></div>
+    <div class="page-head"><div><h1>${ico("digest")} Digest du ${esc(today)}</h1><p class="lead">L'essentiel de l'actualité en quelques minutes : les sujets les plus couverts, résumés à partir de plusieurs sources, sans les contenus signalés en désaccord.</p></div>
+      <div class="row no-print"><button class="btn" data-act="print">${ico("print")} Exporter en PDF</button><a class="btn primary" href="${mail}">${ico("share")} Envoyer par e-mail</a></div></div>
     <div class="stack">${d.items.map((x, i) => `
       <div class="panel">
-        <div class="row" style="gap:6px;margin-bottom:6px"><b style="color:var(--primary)">${i + 1}.</b>${catBadge(x.article)}${statusBadge(x.article.verification_status)}<span class="badge">${x.source_count} source(s)</span>${demoBadge(x.article)}</div>
-        <h2 style="margin-bottom:6px"><a href="#/article/${x.article.id}" style="color:var(--text)">${esc(x.article.title)}</a></h2>
+        <div class="row" style="gap:6px;margin-bottom:6px"><b style="color:var(--accent);font-family:var(--serif)">${i + 1}.</b>${catBadge(x.article)}${spectre(x.source_count)}${demoBadge(x.article)}</div>
+        <h2 style="margin-bottom:6px"><a href="/article/${x.article.id}" style="color:var(--text)">${esc(x.article.title)}</a></h2>
         <ul class="sum-list">${x.summary.sentences.map((s) => `<li>${esc(s.text)} <span class="cite">${s.cite}</span></li>`).join("")}</ul>
         <div class="small muted">${x.summary.sources.map((r) => `[${r.n}] ${esc(r.source)}`).join(" · ")} — ${ago(x.article.published_at)}</div>
       </div>`).join("") || empty("Pas encore assez de contenus pour générer le digest.")}</div>
@@ -498,13 +571,13 @@ async function pageVeille() {
         <h2>${ico("bell")} Alertes par mots-clés</h2>
         <form class="row" id="alertForm"><input class="input" name="keyword" placeholder="Nouveau mot-clé (ex. élection, cacao, IA…)" style="flex:1" required><button class="btn primary">${ico("plus")} Ajouter</button></form>
         <div style="margin-top:12px">${alerts.map((al) => `<div class="switch"><div><b>${esc(al.keyword)}</b><div class="small muted">${al.hits} article(s) détecté(s)</div></div>
-          <div class="row"><a class="btn sm" href="#/recherche?q=${encodeURIComponent(al.keyword)}">${ico("search")}</a><label class="small row" style="gap:4px"><input type="checkbox" data-act="alerttoggle" data-id="${al.id}" ${al.active ? "checked" : ""}> active</label><button class="btn sm danger" data-act="alertdel" data-id="${al.id}">${ico("trash")}</button></div></div>`).join("") || `<p class="muted">Aucune alerte configurée.</p>`}</div>
+          <div class="row"><a class="btn sm" href="/recherche?q=${encodeURIComponent(al.keyword)}">${ico("search")}</a><label class="small row" style="gap:4px"><input type="checkbox" data-act="alerttoggle" data-id="${al.id}" ${al.active ? "checked" : ""}> active</label><button class="btn sm danger" data-act="alertdel" data-id="${al.id}">${ico("trash")}</button></div></div>`).join("") || `<p class="muted">Aucune alerte configurée.</p>`}</div>
       </div>
       <div class="panel">
         <h2>${ico("folder")} Dossiers de veille</h2>
         <form class="row" id="folderForm"><input class="input" name="name" placeholder="Nom du dossier" style="flex:1" required><input type="color" name="color" value="#0ea5e9" style="width:44px;height:42px;border:0;background:none"><button class="btn primary">${ico("plus")} Créer</button></form>
         <div style="margin-top:12px">${favs.folders.map((f) => `<div class="switch"><div class="row"><span style="width:12px;height:12px;border-radius:4px;background:${esc(f.color)}"></span><b>${esc(f.name)}</b><span class="muted small">${f.n} article(s)</span></div>
-          <div class="row"><a class="btn sm" href="#/favoris?folder=${f.id}">Ouvrir</a><a class="btn sm" href="/api/export?format=txt&folder=${f.id}" data-act="download">${ico("download")} TXT</a><button class="btn sm danger" data-act="folderdel" data-id="${f.id}">${ico("trash")}</button></div></div>`).join("") || `<p class="muted">Aucun dossier.</p>`}</div>
+          <div class="row"><a class="btn sm" href="/favoris?folder=${f.id}">Ouvrir</a><a class="btn sm" href="/api/export?format=txt&folder=${f.id}" data-act="download">${ico("download")} TXT</a><button class="btn sm danger" data-act="folderdel" data-id="${f.id}">${ico("trash")}</button></div></div>`).join("") || `<p class="muted">Aucun dossier.</p>`}</div>
       </div>
     </div>`;
   $("#alertForm").onsubmit = async (e) => { e.preventDefault(); const r = await post("/api/alerts", { keyword: e.target.keyword.value }); toast(`Alerte ajoutée${r.created_notifications ? ` — ${r.created_notifications} nouvelle(s) notification(s)` : ""}.`); refreshMe(); pageVeille(); };
@@ -518,9 +591,9 @@ async function pageFavorites(params) {
   const r = await get("/api/favorites");
   const items = folder ? r.items.filter((a) => String(a.folder_id) === folder) : r.items;
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("star")} Mes favoris</h1><p class="lead">Articles enregistrés pour une lecture ultérieure. Ils restent consultables hors-ligne, car stockés dans la base de données locale.</p></div>
+    <div class="page-head"><div><h1>${ico("star")} Mes favoris</h1><p class="lead">Articles enregistrés pour une lecture ultérieure. </p></div>
       <div class="row"><a class="btn" href="/api/export?format=txt" data-act="download">${ico("download")} TXT</a><a class="btn" href="/api/export?format=csv" data-act="download">${ico("download")} CSV</a><a class="btn" href="/api/export?format=bib" data-act="download">${ico("book")} Bibliographie (BibTeX)</a></div></div>
-    <div class="chips" style="margin-bottom:16px"><a class="chip ${!folder ? "active" : ""}" href="#/favoris">Tous (${r.items.length})</a>${r.folders.map((f) => `<a class="chip ${folder == f.id ? "active" : ""}" href="#/favoris?folder=${f.id}">${esc(f.name)} (${f.n})</a>`).join("")}</div>
+    <div class="chips" style="margin-bottom:16px"><a class="chip ${!folder ? "active" : ""}" href="/favoris">Tous (${r.items.length})</a>${r.folders.map((f) => `<a class="chip ${folder == f.id ? "active" : ""}" href="/favoris?folder=${f.id}">${esc(f.name)} (${f.n})</a>`).join("")}</div>
     ${items.length ? cards(items) : empty("Aucun favori. Cliquez sur l'étoile d'un article pour l'enregistrer.", "star")}`;
 }
 
@@ -533,7 +606,7 @@ async function pageNotifications() {
       <div class="row"><button class="btn" data-act="pushperm">${ico("bell")} Activer les notifications du navigateur</button><button class="btn primary" data-act="readall">${ico("check")} Tout marquer comme lu</button></div></div>
     <div class="panel" style="padding:6px 18px">${n.map((x) => `<div class="switch" style="${x.is_read ? "opacity:.65" : ""}">
       <div class="row" style="flex-wrap:nowrap;align-items:flex-start"><span class="badge ${x.is_read ? "" : "b-info"}">${ico(KIND[x.kind][0])}${KIND[x.kind][1]}</span>
-      <div>${x.article_id ? `<a href="#/article/${x.article_id}" data-act="readone" data-id="${x.id}">${esc(x.message)}</a>` : esc(x.message)}<div class="small muted">${fmtDate(x.created_at)}</div></div></div>
+      <div>${x.article_id ? `<a href="/article/${x.article_id}" data-act="readone" data-id="${x.id}">${esc(x.message)}</a>` : esc(x.message)}<div class="small muted">${fmtDate(x.created_at)}</div></div></div>
       ${x.is_read ? "" : `<button class="btn sm" data-act="readone" data-id="${x.id}">Lu</button>`}</div>`).join("") || empty("Aucune notification.", "bell")}</div>`;
 }
 
@@ -548,12 +621,12 @@ async function pageReports(params) {
   const list = await get("/api/reports" + (all ? "?all=1" : ""));
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("flag")} ${all ? "Modération des signalements" : "Mes signalements"}</h1><p class="lead">Les lecteurs signalent les informations incorrectes ; l'équipe de modération les examine et publie une correction visible sur l'article.</p></div>
-      ${admin ? `<div class="tabs"><a class="tab ${all ? "active" : ""}" href="#/signalements">File de modération</a><a class="tab ${!all ? "active" : ""}" href="#/signalements?all=0">Mes signalements</a></div>` : ""}</div>
+      ${admin ? `<div class="tabs"><a class="tab ${all ? "active" : ""}" href="/signalements">File de modération</a><a class="tab ${!all ? "active" : ""}" href="/signalements?all=0">Mes signalements</a></div>` : ""}</div>
     <div class="stack">${list.map((r) => `
       <div class="panel">
         <div class="row between"><div class="row">${reportStatus(r.status)}<span class="badge">${esc(REASONS[r.reason])}</span><span class="small muted">${fmtDate(r.created_at)}${r.reporter ? " · par " + esc(r.reporter) : ""}</span></div></div>
-        <h3 style="margin-top:10px"><a href="#/article/${r.article_id}">${esc(r.article_title)}</a> <span class="small muted">— ${esc(r.source_name)}</span></h3>
-        <p style="margin:6px 0">${esc(r.description)}</p>${r.evidence_url ? `<a class="small" href="${esc(r.evidence_url)}" target="_blank" rel="noopener">${ico("ext")} Preuve fournie</a>` : ""}
+        <h3 style="margin-top:10px"><a href="/article/${r.article_id}">${esc(r.article_title)}</a> <span class="small muted">— ${esc(r.source_name)}</span></h3>
+        <p style="margin:6px 0">${esc(r.description)}</p>${safeUrl(r.evidence_url) ? `<a class="small" href="${esc(safeUrl(r.evidence_url))}" target="_blank" rel="noopener">${ico("ext")} Preuve fournie</a>` : ""}
         ${r.admin_response ? `<div class="alert-line info small" style="margin-top:8px">${ico("info")}<span><b>Réponse de la modération :</b> ${esc(r.admin_response)}</span></div>` : ""}
         ${all ? `<form class="grid g3 mod" data-id="${r.id}" style="margin-top:12px;align-items:end">
           <label class="f"><span>Statut</span><select class="input" name="status">${Object.entries(RSTAT).map(([k, v]) => `<option value="${k}" ${r.status === k ? "selected" : ""}>${v[1]}</option>`).join("")}</select></label>
@@ -573,40 +646,63 @@ async function pageSources() {
   const list = await get("/api/sources");
   const admin = S.user && S.user.role === "admin";
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("db")} Sources & fiabilité</h1><p class="lead">Médias agrégés par Prisme via leurs flux RSS publics. Chaque contenu renvoie vers sa source originale. L'indice de fiabilité est indicatif et paramétrable par l'administrateur.</p></div>
+    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias et renvoie toujours vers l'article original. Il ne note pas les médias.</p></div>
       ${admin ? `<button class="btn primary" data-act="addsource">${ico("plus")} Ajouter un flux RSS</button>` : ""}</div>
     <div class="panel table-wrap" style="padding:0"><table class="t">
-      <thead><tr><th>Source</th><th>Type</th><th>Langue</th><th>Fiabilité</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
+      <thead><tr><th>Média</th><th>Type</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
       <tbody>${list.map((s) => `<tr style="${s.active ? "" : "opacity:.5"}">
-        <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span>` : ""}${s.certified ? ` <span class="badge b-ok">${ico("check")}Certifiée</span>` : ""}<div class="small muted">${s.website ? `<a href="${esc(s.website)}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note)}</div></td>
-        <td>${esc(s.kind)}</td><td>${esc(s.language.toUpperCase())}</td>
-        <td style="min-width:150px">${admin ? `<input type="range" min="0" max="100" value="${s.reliability}" data-act="rel" data-id="${s.id}" aria-label="Fiabilité"> ` : ""}<span class="track" style="display:block;margin:4px 0"><i style="width:${s.reliability}%;background:${s.reliability >= 75 ? "var(--ok)" : s.reliability >= 50 ? "var(--info)" : "var(--bad)"}"></i></span><span class="small" id="rel-${s.id}">${s.reliability}/100</span></td>
+        <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span> ${relBadge(s.reliability, s.certified, 1)}` : ""}<div class="small muted">${safeUrl(s.website) ? `<a href="${esc(safeUrl(s.website))}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note || "")}</div></td>
+        <td>${esc(s.kind)}</td><td>${esc(s.country || "")}</td><td>${esc(s.language.toUpperCase())}</td>
         <td>${s.articles}</td>
         <td class="small">${s.feed_url ? (s.last_fetched_at ? fmtDate(s.last_fetched_at) : "jamais") : "—"}${s.last_error ? `<div class="small" style="color:var(--bad)" title="${esc(s.last_error)}">échec de collecte</div>` : ""}</td>
-        ${admin ? `<td><div class="row"><label class="small row" style="gap:4px"><input type="checkbox" data-act="srcactive" data-id="${s.id}" ${s.active ? "checked" : ""}>active</label><label class="small row" style="gap:4px"><input type="checkbox" data-act="srccert" data-id="${s.id}" ${s.certified ? "checked" : ""}>certifiée</label>${!s.is_demo ? `<button class="btn sm danger" data-act="srcdel" data-id="${s.id}">${ico("trash")}</button>` : ""}</div></td>` : ""}
+        ${admin ? `<td><div class="row"><label class="small row" style="gap:4px"><input type="checkbox" data-act="srcactive" data-id="${s.id}" ${s.active ? "checked" : ""}>active</label>${!s.is_demo ? `<button class="btn sm danger" data-act="srcdel" data-id="${s.id}" aria-label="Supprimer ${esc(s.name)}">${ico("trash")}</button>` : ""}</div></td>` : ""}
       </tr>`).join("")}</tbody></table></div>`;
+}
+
+function pageMethod() {
+  main().innerHTML = `
+    <div style="max-width:760px">
+      <span class="kicker">Transparence</span><h1>Notre méthode</h1>
+      <p class="lead">Prisme mesure comment plusieurs médias couvrent un même événement. Il ne dit pas si un fait est vrai.</p>
+      <h2>Ce que signifient les statuts</h2>
+      <dl class="facts" style="grid-template-columns:minmax(120px,190px) 1fr;gap:10px 16px;font-size:.95rem;margin-bottom:22px">
+        <dt><b>Source unique</b></dt><dd>Un seul média suivi par Prisme en parle pour l'instant. Cela ne veut pas dire que l'information est fausse.</dd>
+        <dt><b>Repris par N sources</b></dt><dd>N médias distincts publient sur le même événement. Ils peuvent tous reprendre une même dépêche : ce n'est donc pas une preuve.</dd>
+        <dt><b>Chiffres divergents</b></dt><dd>Des médias donnent des chiffres différents pour une même donnée. Un bilan peut aussi simplement évoluer dans le temps.</dd>
+        <dt><b>Démenti signalé</b></dt><dd>Un média suivi emploie un vocabulaire de démenti sur ce sujet. Lisez les sources pour juger.</dd>
+      </dl>
+      <h2>Comment les articles sont regroupés</h2>
+      <p>Le logiciel compare les titres et les extraits (similarité statistique), sur quelques jours et dans une même langue. Il peut se tromper : réunir deux sujets voisins, ou manquer un même événement traité en français et en anglais.</p>
+      <h2>Résumés automatiques</h2>
+      <p>Les résumés sont produits par extraction : chaque phrase est copiée telle quelle depuis un article cité, avec son lien. Aucun texte n'est rédigé par un modèle de langage, aucune citation ni statistique n'est créée. Une phrase extraite reste à lire dans son contexte, sur le site d'origine.</p>
+      <h2>Ce que Prisme conserve</h2>
+      <p>Pour chaque article : le média d'origine, le lien, la date de publication déclarée et la date de collecte. Les corrections publiées et les changements de statut sont journalisés.</p>
+      <h2>Une erreur ?</h2>
+      <p>Chaque article propose un bouton « Signaler une erreur ». Les signalements sont examinés et les corrections apparaissent sur la page concernée.</p>
+    </div>`;
 }
 
 async function pageAdmin() {
   if (!S.user || S.user.role !== "admin") return needLogin("l'administration (compte administrateur)");
-  const [st, users] = await Promise.all([get("/api/stats"), get("/api/admin/users")]);
+  const [st, users, changes] = await Promise.all([get("/api/stats"), get("/api/admin/users"), get("/api/admin/changes")]);
   const max = (arr) => Math.max(1, ...arr.map((x) => x.n));
   const ST_COL = { verifie: "var(--ok)", partiel: "var(--info)", non_verifie: "var(--warn)", conteste: "var(--bad)", en_attente: "var(--muted)" };
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("chart")} Tableau de bord d'administration</h1><p class="lead">Supervision de la collecte, de la détection des doublons, de la vérification et de la modération.</p></div>
       <div class="row"><button class="btn primary" data-act="refresh">${ico("refresh")} Collecter les flux RSS</button><button class="btn" data-act="recluster">${ico("layers")} Recalculer doublons & vérifications</button></div></div>
     <div class="grid g4">
-      <div class="kpi"><span>Contenus agrégés</span><b>${st.articles}</b><span>${st.real_sources} sources réelles actives</span></div>
+      <div class="kpi"><span>Contenus agrégés</span><b>${st.articles}</b><span>${st.real_sources} médias réels actifs</span></div>
       <div class="kpi"><span>Doublons regroupés</span><b>${st.duplicates}</b><span>${st.dedup_rate} % du volume · ${st.multi_source_topics} sujets multi-sources</span></div>
-      <div class="kpi"><span>Affirmations analysées</span><b>${st.claims}</b><span>${st.evidences} preuves rattachées</span></div>
-      <div class="kpi"><span>Signalements ouverts</span><b>${st.reports_open}</b><span>sur ${st.reports_total} au total · <a href="#/signalements">modérer</a></span></div>
+      <div class="kpi"><span>Phrases analysées</span><b>${st.claims}</b><span>${st.evidences} passages rapprochés</span></div>
+      <div class="kpi"><span>Signalements ouverts</span><b>${st.reports_open}</b><span>sur ${st.reports_total} au total · <a href="/signalements">modérer</a></span></div>
     </div>
     <div class="grid g3" style="margin-top:16px">
-      <div class="panel"><h3>Statut de vérification</h3>${st.verification.map((v) => `<div class="hbar"><span>${STATUS[v.status][2]}</span><span class="track"><i style="width:${v.n / max(st.verification) * 100}%;background:${ST_COL[v.status]}"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
+      <div class="panel"><h3>Couverture</h3>${st.verification.map((v) => `<div class="hbar"><span>${STATUS[v.status][2]}</span><span class="track"><i style="width:${v.n / max(st.verification) * 100}%;background:${ST_COL[v.status]}"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
       <div class="panel"><h3>Contenus par rubrique</h3>${st.by_category.map((v) => `<div class="hbar"><span>${esc(v.name)}</span><span class="track"><i style="width:${v.n / max(st.by_category) * 100}%"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
       <div class="panel"><h3>Contenus par source (top 12)</h3>${st.by_source.map((v) => `<div class="hbar"><span class="small" title="${esc(v.name)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v.name)}</span><span class="track"><i style="width:${v.n / max(st.by_source) * 100}%"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
     </div>
     <div class="panel" style="margin-top:16px"><h3>${ico("refresh")} Dernière collecte</h3>${st.last_fetch ? `<p class="small">${fmtDate(st.last_fetch.finished_at)} — ${st.last_fetch.sources_ok} source(s) OK, ${st.last_fetch.sources_ko} en échec, <b>${st.last_fetch.new_articles}</b> nouveau(x) contenu(s), ${esc(st.last_fetch.message || "")}.</p>` : `<p class="small muted">Aucune collecte terminée (connexion Internet requise).</p>`}${st.fetching ? `<span class="badge b-info">Collecte en cours…</span>` : ""}</div>
+    <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("clock")} Journal des modifications</h3>${changes.length ? `<table class="t"><thead><tr><th>Date</th><th>Auteur</th><th>Objet</th><th>Action</th><th>Détail</th></tr></thead><tbody>${changes.slice(0, 20).map((c) => `<tr><td class="small">${fmtDate(c.at)}</td><td>${esc(c.actor)}</td><td>${esc(c.entity)} ${c.entity_id ?? ""}</td><td>${esc(c.action)}</td><td class="small">${esc(c.detail || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="small muted">Aucune modification enregistrée.</p>`}</div>
     <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("users")} Utilisateurs (${users.length})</h3><table class="t"><thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Profil</th><th>Lectures</th><th>Favoris</th><th>Signalements</th><th>Inscription</th></tr></thead>
       <tbody>${users.map((u) => `<tr><td><b>${esc(u.display_name)}</b><div class="small muted">${esc(u.email)}</div></td><td>${esc(u.username)}</td><td>${u.role === "admin" ? `<span class="badge b-info">admin</span>` : "utilisateur"}</td><td class="small">${esc(u.persona || "—")}</td><td>${u.lectures}</td><td>${u.favoris}</td><td>${u.signalements}</td><td class="small">${fmtDate(u.created_at, false)}</td></tr>`).join("")}</tbody></table></div>`;
 }
@@ -638,9 +734,10 @@ async function pageSettings() {
         <h2>${ico("user")} Mon compte</h2>
         <form id="accForm"><label class="f"><span>Nom affiché</span><input class="input" name="display_name" value="${esc(u.display_name)}"></label>
         <label class="f"><span>E-mail</span><input class="input" type="email" name="email" value="${esc(u.email)}"></label>
-        <label class="f"><span>Nouveau mot de passe (facultatif)</span><input class="input" type="password" name="new_password" autocomplete="new-password"></label>
+        <label class="f"><span>Mot de passe actuel (requis pour en changer)</span><input class="input" type="password" name="current_password" autocomplete="current-password"></label>
+        <label class="f"><span>Nouveau mot de passe, 8 caractères minimum (facultatif)</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label>
         <button class="btn primary">${ico("check")} Mettre à jour</button></form>
-      </div>` : `<div class="panel"><h2>Personnalisation</h2><p class="muted">Connectez-vous pour choisir vos centres d'intérêt, vos alertes et la part de découverte de votre fil. En mode invité, les préférences d'affichage sont mémorisées dans ce navigateur.</p><a class="btn primary" href="#/connexion">Se connecter</a></div>`}
+      </div>` : `<div class="panel"><h2>Personnalisation</h2><p class="muted">Connectez-vous pour choisir vos centres d'intérêt, vos alertes et la part de découverte de votre fil. En mode invité, les préférences d'affichage sont mémorisées dans ce navigateur.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`}
     </div>`;
   $("#fs").oninput = (e) => { $("#fsv").textContent = Math.round(e.target.value * 100) + " %"; document.documentElement.style.setProperty("--fs", e.target.value); };
   $("#saveA").onclick = async () => {
@@ -658,7 +755,7 @@ async function pageSettings() {
     toast("Personnalisation enregistrée : votre fil a été recalculé.");
   };
   $("#clearH").onclick = async () => { if (confirm("Effacer tout votre historique de lecture ?")) { await del("/api/history"); toast("Historique effacé."); } };
-  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await put("/api/me", Object.fromEntries(new FormData(e.target))); S.user = r.user; renderNav(); toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
+  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const r = await put("/api/me", Object.fromEntries(new FormData(e.target))); S.user = r.user; renderNav(); e.target.current_password.value = ""; e.target.new_password.value = ""; toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
 }
 
 const PERSONAS = [
@@ -679,17 +776,17 @@ function pageLogin() {
           <button class="btn primary" style="width:100%;justify-content:center">Se connecter</button></form>
         <form id="regForm" hidden><label class="f"><span>Nom complet</span><input class="input" name="display_name" required></label>
           <div class="grid g2"><label class="f"><span>Identifiant</span><input class="input" name="username" required></label><label class="f"><span>E-mail</span><input class="input" type="email" name="email" required></label></div>
-          <label class="f"><span>Mot de passe (6 caractères minimum)</span><input class="input" type="password" name="password" required minlength="6" autocomplete="new-password"></label>
+          <label class="f"><span>Mot de passe (8 caractères minimum)</span><input class="input" type="password" name="password" required minlength="8" autocomplete="new-password"></label>
           <div class="f"><span style="display:block;font-weight:600;font-size:.88rem;margin-bottom:6px">Vos centres d'intérêt</span><div class="chips">${S.cats.map((c) => `<label class="chip"><input type="checkbox" name="interests" value="${c.slug}" style="margin-right:4px">${esc(c.name)}</label>`).join("")}</div></div>
           <button class="btn primary" style="width:100%;justify-content:center;margin-top:8px">Créer mon compte</button></form>
-        <p class="small muted" style="margin-bottom:0">Mots de passe chiffrés (PBKDF2-SHA256, 120 000 itérations). Compte administrateur de démonstration : <b>admin / admin123</b>.</p>
+        <p class="small muted" style="margin-bottom:0">Un compte permet de suivre des mots-clés, d'enregistrer des favoris et de personnaliser le fil. Lire Prisme n'en nécessite pas.</p>
       </div>
-      <div class="panel">
-        <h2>Comptes de démonstration (personas)</h2>
-        <p class="small muted">Chaque profil du cahier des charges est préconfiguré (intérêts, alertes, dossiers, historique). Mot de passe : <b>demo123</b>.</p>
+      ${S.config && S.config.demo_logins ? `<div class="panel">
+        <h2>Profils de démonstration</h2>
+        <p class="small muted">Chaque profil du cahier des charges est préconfiguré (intérêts, alertes, dossiers, historique).</p>
         <div class="stack">${PERSONAS.map(([u, n, r, f]) => `<button class="persona" data-act="demo" data-u="${u}"><span class="avatar">${initials(n)}</span><span><b>${n} — ${r}</b><span class="small muted">${f}</span></span></button>`).join("")}
-          <button class="persona" data-act="demo" data-u="admin"><span class="avatar" style="background:#0f172a">AD</span><span><b>Administrateur</b><span class="small muted">Tableau de bord, modération, gestion des sources</span></span></button></div>
-      </div>
+          <button class="persona" data-act="demo" data-u="admin"><span class="avatar">AD</span><span><b>Administrateur</b><span class="small muted">Tableau de bord, modération, gestion des sources</span></span></button></div>
+      </div>` : ""}
     </div>`;
   $("#loginForm").onsubmit = async (e) => { e.preventDefault(); doLogin(Object.fromEntries(new FormData(e.target))); };
   $("#regForm").onsubmit = async (e) => {
@@ -705,53 +802,53 @@ async function doLogin(body) {
 }
 async function onLogged(r) {
   S.token = r.token; S.user = r.user; store.set("prisme_token", r.token);
-  await refreshMe(); applyPrefs(); location.hash = "#/";
+  await refreshMe(); applyPrefs(); S.feedMode = "pour_vous"; nav("/");
 }
 function logoutLocal() { S.token = null; S.user = null; S.favs = new Set(); S.unread = 0; store.del("prisme_token"); applyPrefs(); renderNav(); }
 function needLogin(what) {
-  main().innerHTML = `<div class="panel empty">${ico("user")}<h2>Connexion requise</h2><p>Connectez-vous pour accéder à ${esc(what)}.</p><a class="btn primary" href="#/connexion">Se connecter</a></div>`;
+  main().innerHTML = `<div class="panel empty">${ico("user")}<h2>Connexion requise</h2><p>Connectez-vous pour accéder à ${esc(what)}.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`;
 }
 
 function pageProject() {
   const done = (t) => `<li>${ico("check")}<span>${t}</span></li>`;
   const later = (t) => `<li style="color:var(--muted)">${ico("clock")}<span>${t}</span></li>`;
   main().innerHTML = `
-    <section class="hero"><h1>Prisme — Agrégateur intelligent des nouveaux médias</h1>
-      <p>Projet de Community Management · ESATIC — Licence 3 TWIN · Groupe 7 : Eboua Franck, Kah Toily, Yao Francklin · Encadrant : M. Cédric Cissé</p></section>
+    <section style="margin-bottom:22px"><span class="kicker">Le projet</span><h1>Prisme, agrégateur intelligent des nouveaux médias</h1>
+      <p class="lead">Projet de Community Management · ESATIC — Licence 3 TWIN · Groupe 7 : Eboua Franck, Kah Toily, Yao Francklin · Encadrant : M. Cédric Cissé</p></section>
     <div class="grid g2">
       <div class="panel"><h2>Problématique</h2><p>L'information est fragmentée entre des dizaines de médias, de réseaux sociaux et de formats. Le lecteur voit dix fois la même actualité, ne sait pas quelle source croire, ne distingue pas une information récente d'un article ancien qui recircule, et se retrouve enfermé dans une bulle de filtres.</p>
-        <h3>Réponse apportée</h3><p style="margin:0">Un agrégateur unique qui <b>regroupe</b> les doublons, <b>compare</b> les traitements, <b>vérifie</b> les affirmations, <b>date</b> clairement l'information, <b>explique</b> ses recommandations et permet aux lecteurs de <b>signaler</b> les erreurs.</p></div>
+        <h3>Réponse apportée</h3><p style="margin:0">Un agrégateur unique qui <b>regroupe</b> les doublons, <b>compare</b> les traitements, <b>recoupe</b> les affirmations, <b>date</b> clairement l'information, <b>explique</b> ses recommandations et permet aux lecteurs de <b>signaler</b> les erreurs.</p></div>
       <div class="panel"><h2>Objectifs SMART</h2><ul><li>Livraison du MVP au <b>30/11/2026</b></li><li>Temps de chargement <b>&lt; 2 s</b> (serveur local, requêtes indexées)</li><li>Score d'utilisabilité <b>SUS ≥ 85/100</b></li><li>Accessibilité : taille de texte, contraste élevé, mode simplifié</li><li>Utilisable par <b>tout public</b>, au-delà des six personas</li></ul></div>
     </div>
     <h2 style="margin-top:22px">Priorisation MoSCoW — état d'avancement</h2>
     <div class="moscow">
       <div class="panel"><h3>Indispensable <span class="badge b-ok">100 %</span></h3><ul>${done("Agrégation RSS multi-sources")}${done("Recherche simple et avancée")}${done("Favoris et dossiers")}${done("Dates de publication et de collecte")}${done("Liens vers les sources originales")}${done("Lecteur audio intégré")}${done("Design responsive")}</ul></div>
-      <div class="panel"><h3>Très important <span class="badge b-ok">100 %</span></h3><ul>${done("Détection des doublons")}${done("Résumé IA avec citations vérifiables")}${done("Statut de vérification")}${done("Indicateur de fraîcheur / recirculation")}${done("Transparence des recommandations")}</ul></div>
+      <div class="panel"><h3>Très important <span class="badge b-ok">100 %</span></h3><ul>${done("Détection des doublons")}${done("Résumé IA avec citations vérifiables")}${done("Statut de couverture")}${done("Indicateur de fraîcheur / recirculation")}${done("Transparence des recommandations")}</ul></div>
       <div class="panel"><h3>Ensuite <span class="badge b-ok">100 %</span></h3><ul>${done("Comparaison de plusieurs sources")}${done("Signalement d'erreurs + modération")}${done("Notifications personnalisées par mots-clés")}${done("Digest quotidien")}${done("Traduction et simplification")}${done("Personnalisation anti-bulle")}${done("Export TXT / CSV / BibTeX")}</ul></div>
-      <div class="panel"><h3>Plus tard <span class="badge">Prévu</span></h3><ul>${later("Vérification multimédia avancée (images, vidéos truquées)")}${later("Analyse des réseaux sociaux en temps réel")}${later("Synthèses complexes par grand modèle de langage")}${later("Application mobile et notifications push natives")}${later("Hébergement cloud et montée en charge")}</ul></div>
+      <div class="panel"><h3>Plus tard <span class="badge">Prévu</span></h3><ul>${later("Vérification multimédia avancée (images, vidéos truquées)")}${later("Analyse des réseaux sociaux en temps réel")}${later("Synthèses complexes par grand modèle de langage")}${later("Application mobile et notifications push natives")}${later("Montée en charge de l'hébergement")}</ul></div>
     </div>
     <h2 style="margin-top:22px">Personas et fonctionnalités associées</h2>
     <div class="panel table-wrap" style="padding:0"><table class="t"><thead><tr><th>Persona</th><th>Besoin principal</th><th>Fonctionnalités Prisme</th><th>Démo</th></tr></thead><tbody>
-      ${PERSONAS.map(([u, n, r, f]) => `<tr><td><b>${n}</b><div class="small muted">${r}</div></td><td class="small">${{ aminata: "Regrouper tous les flux, alertes temps réel", kevin: "Écouter sans interruption, filtrer le multimédia", kouassi: "Synthèse rapide, partage interne", yao: "Repérer les sujets tendance à relayer", paul: "Lisibilité et navigation très simple", sara: "Retrouver et citer d'anciens articles fiables" }[u]}</td><td class="small">${f}</td><td><button class="btn sm" data-act="demo" data-u="${u}">Se connecter</button></td></tr>`).join("")}
-      <tr><td><b>Tout public</b><div class="small muted">Visiteur non inscrit</div></td><td class="small">S'informer rapidement et de façon fiable</td><td class="small">Fil non personnalisé, vérification, fraîcheur, comparaison, traduction, simplification</td><td><a class="btn sm" href="#/">Explorer</a></td></tr>
+      ${PERSONAS.map(([u, n, r, f]) => `<tr><td><b>${n}</b><div class="small muted">${r}</div></td><td class="small">${{ aminata: "Regrouper tous les flux, alertes temps réel", kevin: "Écouter sans interruption, filtrer le multimédia", kouassi: "Synthèse rapide, partage interne", yao: "Repérer les sujets tendance à relayer", paul: "Lisibilité et navigation très simple", sara: "Retrouver et citer d'anciens articles fiables" }[u]}</td><td class="small">${f}</td><td>${S.config && S.config.demo_logins ? `<button class="btn sm" data-act="demo" data-u="${u}">Se connecter</button>` : "—"}</td></tr>`).join("")}
+      <tr><td><b>Tout public</b><div class="small muted">Visiteur non inscrit</div></td><td class="small">S'informer rapidement et de façon fiable</td><td class="small">Fil non personnalisé, vérification, fraîcheur, comparaison, traduction, simplification</td><td><a class="btn sm" href="/">Explorer</a></td></tr>
     </tbody></table></div>
     <h2 style="margin-top:22px">Architecture technique</h2>
     <div class="arch">
-      <div><b>Interface (client)</b>Application monopage HTML5 / CSS3 / JavaScript natif, routage par ancre, thèmes clair/sombre, responsive.</div>
+      <div><b>Interface (client)</b>Pages rendues côté serveur puis application monopage en JavaScript natif, thèmes clair/sombre, responsive.</div>
       <div><b>API REST (serveur)</b>Python 3 (bibliothèque standard) : serveur HTTP multi-thread, 40+ routes JSON, sessions par jeton.</div>
       <div><b>Moteur IA explicable</b>TAL statistique : vecteurs TF, similarité cosinus, extraction d'affirmations, lisibilité, tonalité.</div>
-      <div><b>Base de données</b>SQLite relationnelle (17 tables + 1 vue), clés étrangères, index, fichier database/prisme.db.</div>
+      <div><b>Base de données</b>SQLite relationnelle (21 tables + 1 vue), clés étrangères et index.</div>
     </div>
     <div class="grid g2" style="margin-top:16px">
       <div class="panel"><h3>Algorithmes clés</h3><ul class="small">
         <li><b>Doublons</b> : index inversé sur les titres, similarité cosinus ≥ 0,42 entre vecteurs pondérés (titre ×2), regroupement par union-find.</li>
-        <li><b>Vérification</b> : détection de 6 types d'affirmations ; recherche de phrases proches dans des sources indépendantes et contemporaines (± 30 jours) ; comparaison des chiffres ; prise en compte des démentis ; score combiné avec la fiabilité de la source.</li>
+        <li><b>Recoupement</b> : détection de 6 types d'affirmations ; recherche de phrases proches dans d'autres médias contemporains (± 30 jours) ; comparaison des chiffres arrêtés ; repérage des démentis. Le statut décrit la couverture, pas la véracité.</li>
         <li><b>Résumé</b> : extraction des phrases les plus centrales du sujet (multi-sources), anti-redondance, citation numérotée de chaque phrase.</li>
         <li><b>Fraîcheur</b> : décroissance exponentielle ; alerte si l'écart entre date de publication et date de reprise dépasse 30 jours.</li>
         <li><b>Recommandation</b> : score pondéré sur 6 critères affichés à l'utilisateur ; quota de « découverte » réglable ; indice de diversité de Shannon.</li></ul></div>
-      <div class="panel"><h3>Base de données</h3><p class="small">users · sessions · categories · sources · articles · clusters · claims · evidences · interests · reading_history · folders · favorites · alerts · notifications · reports · shares · translations · glossary · fetch_log · meta — vue <i>v_articles</i>.</p>
+      <div class="panel"><h3>Base de données</h3><p class="small">users · sessions · categories · sources · articles · clusters · claims · evidences · interests · reading_history · folders · favorites · alerts · notifications · reports · shares · translations · glossary · fetch_log · change_log · meta — vue <i>v_articles</i>.</p>
         <p class="small muted">Le schéma complet est fourni dans <b>database/schema.sql</b>. Les contenus marqués « Démo » sont fictifs et servent à illustrer les scénarios (doublons, rumeur démentie, information ancienne qui recircule).</p>
-        <h3>Éthique et limites</h3><p class="small" style="margin:0">La vérification est <b>assistée</b> : elle oriente l'esprit critique du lecteur sans prétendre établir la vérité. Les scores de fiabilité sont indicatifs et paramétrables. Aucune donnée personnelle n'est transmise à des tiers ; l'utilisateur peut effacer son historique.</p></div>
+        <h3>Éthique et limites</h3><p class="small" style="margin:0">Prisme aide à comparer sans prétendre établir la vérité, et il n'attribue aucune note aux médias réels. Aucune donnée personnelle n'est transmise à des tiers ; l'utilisateur peut effacer son historique.</p></div>
     </div>`;
 }
 
@@ -766,7 +863,7 @@ function modal(html) {
   setTimeout(() => m.querySelector("input, select, textarea, button")?.focus(), 30);
 }
 function closeModal() { $("#modal").hidden = true; $("#modal").innerHTML = ""; }
-const articleLink = (a) => a.url || `${location.origin}/#/article/${a.id}`;
+const articleLink = (a) => a.url || `${location.origin}/article/${a.id}`;
 function postText(a) {
   const tags = (a.keywords || [a.category_name || "Actualité"]).slice(0, 3).map((k) => "#" + String(k).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]/g, ""));
   return `📰 ${a.title}\n\nSource : ${a.source_name} — ${fmtDate(a.published_at, false)}\nStatut Prisme : ${STATUS[a.verification_status]?.[2] || "—"}\n\n👉 ${articleLink(a)}\n\n${tags.join(" ")} #Prisme`;
@@ -798,7 +895,7 @@ function openReport(id) {
   };
 }
 async function toggleFav(id, btn) {
-  if (!S.user) { toast("Connectez-vous pour enregistrer des favoris."); location.hash = "#/connexion"; return; }
+  if (!S.user) { toast("Connectez-vous pour enregistrer des favoris."); nav("/connexion"); return; }
   id = +id;
   if (S.favs.has(id)) { await del(`/api/favorites/${id}`); S.favs.delete(id); toast("Retiré des favoris."); }
   else {
@@ -812,7 +909,7 @@ async function toggleFav(id, btn) {
   }
   markFav(id);
 }
-function markFav(id) { $$(`[data-act="fav"][data-id="${id}"]`).forEach((b) => { b.style.color = S.favs.has(id) ? "#f59e0b" : ""; b.setAttribute("aria-pressed", S.favs.has(id)); }); }
+function markFav(id) { $$(`[data-act="fav"][data-id="${id}"]`).forEach((b) => { b.style.color = S.favs.has(id) ? "var(--accent)" : ""; b.setAttribute("aria-pressed", S.favs.has(id)); }); }
 function openAddSource() {
   modal(`<div class="row between"><h2 style="margin:0">${ico("plus")} Ajouter un flux RSS</h2><button class="btn ghost sm" data-close>${ico("x")}</button></div>
     <form id="srcForm"><label class="f"><span>Nom du média</span><input class="input" name="name" required></label>
@@ -821,7 +918,7 @@ function openAddSource() {
       <label class="f"><span>Langue</span><select class="input" name="language"><option value="fr">Français</option><option value="en">Anglais</option></select></label>
       <label class="f"><span>Type</span><select class="input" name="kind">${["presse", "tv", "radio", "web", "podcast", "agence", "social"].map((k) => `<option>${k}</option>`).join("")}</select></label>
       <label class="f"><span>Rubrique par défaut</span><select class="input" name="category"><option value="">Classement automatique</option>${S.cats.map((c) => `<option value="${c.slug}">${esc(c.name)}</option>`).join("")}</select></label>
-      <label class="f"><span>Fiabilité (0-100)</span><input class="input" type="number" min="0" max="100" name="reliability" value="60"></label></div>
+      </div>
       <button class="btn primary">${ico("check")} Tester et ajouter</button></form>`);
   $("#srcForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -852,7 +949,7 @@ document.addEventListener("click", async (e) => {
     switch (act) {
       case "mode": S.feedMode = el.dataset.mode; pageFeed(); break;
       case "cat": S.feedCat = el.dataset.cat; $$("[data-act=cat]").forEach((c) => c.classList.toggle("active", c === el)); loadFeed(true); break;
-      case "compare": location.hash = `#/sujet/${el.dataset.cluster}`; break;
+      case "compare": nav(`/sujet/${el.dataset.cluster}`); break;
       case "why": {
         const c = el.closest(".card"), box = c.querySelector(".why");
         box.innerHTML = whyHtml(CARD_CACHE.get(+c.dataset.id).why); box.hidden = !box.hidden; break;
@@ -871,13 +968,15 @@ document.addEventListener("click", async (e) => {
       case "post": await openShare(id); break;
       case "sharelog": post(`/api/articles/${id}/share`, { channel: el.dataset.ch }).catch(() => {}); break;
       case "mmtab": mmTab = el.dataset.tab; pageMultimedia(); break;
-      case "demo": doLogin({ username: el.dataset.u, password: el.dataset.u === "admin" ? "admin123" : "demo123" }); break;
+      case "demo": { const r = await post("/api/demo-login", { username: el.dataset.u }); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); break; }
+      case "back": if (history.length > 1) history.back(); else nav("/"); break;
+      case "print": window.print(); break;
       case "authtab": $$("[data-act=authtab]").forEach((t) => t.classList.toggle("active", t === el)); $("#loginForm").hidden = el.dataset.t !== "login"; $("#regForm").hidden = el.dataset.t === "login"; break;
       case "usermenu":
         modal(`<div class="row"><span class="avatar">${initials(S.user.display_name)}</span><div><b>${esc(S.user.display_name)}</b><div class="small muted">${esc(S.user.persona || S.user.email)}</div></div></div>
-          <div class="stack" style="margin-top:16px"><a class="btn" href="#/parametres" data-close>${ico("gear")} Paramètres</a><a class="btn" href="#/favoris" data-close>${ico("star")} Mes favoris</a><a class="btn" href="#/veille" data-close>${ico("eye")} Ma veille</a>
+          <div class="stack" style="margin-top:16px"><a class="btn" href="/parametres" data-close>${ico("gear")} Paramètres</a><a class="btn" href="/favoris" data-close>${ico("star")} Mes favoris</a><a class="btn" href="/veille" data-close>${ico("eye")} Ma veille</a>
           <button class="btn danger" data-act="logout">${ico("logout")} Se déconnecter</button></div>`); break;
-      case "logout": await post("/api/logout").catch(() => {}); logoutLocal(); closeModal(); toast("Vous êtes déconnecté(e)."); location.hash = "#/"; route(); break;
+      case "logout": await post("/api/logout").catch(() => {}); logoutLocal(); closeModal(); toast("Vous êtes déconnecté(e)."); nav("/"); route(); break;
       case "alertdel": await del(`/api/alerts/${id}`); pageVeille(); break;
       case "folderdel": if (confirm("Supprimer ce dossier ? Les articles restent dans vos favoris.")) { await del(`/api/folders/${id}`); pageVeille(); } break;
       case "readall": await post("/api/notifications/read"); await refreshMe(); pageNotifications(); break;
@@ -902,7 +1001,17 @@ document.addEventListener("change", async (e) => {
     if (act === "rel") { await put(`/api/sources/${id}`, { reliability: +el.value }); $("#rel-" + id).textContent = el.value + "/100"; toast("Fiabilité mise à jour (prise en compte à la prochaine analyse)."); }
   } catch (err) { toast(err.message, 1); }
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#modal").hidden) closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (!$("#modal").hidden) closeModal(); else closeDrawer(); } });
+document.addEventListener("error", (e) => {   // image distante indisponible : on garde une mise en page propre
+  if (e.target.tagName === "IMG") { const box = e.target.closest(".card-img,.frame"); if (box) { box.classList.add("ph"); } e.target.remove(); }
+}, true);
+document.addEventListener("click", (e) => {   // liens internes sans rechargement de page
+  const a = e.target.closest("a[href^='/']");
+  if (!a || e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || a.target || a.dataset.act === "download" || a.getAttribute("href").startsWith("/api/")) return;
+  e.preventDefault();
+  closeModal();
+  nav(a.getAttribute("href"));
+});
 
 async function download(href) {
   const res = await fetch(href, { headers: { Authorization: "Bearer " + S.token } });
@@ -915,7 +1024,6 @@ async function download(href) {
 }
 
 async function startRefresh() {
-  if (!S.user) { toast("Connectez-vous pour lancer une collecte."); return; }
   await post("/api/refresh");
   toast("Collecte des flux RSS en cours…");
   $("#refreshBtn").classList.add("spin");
@@ -950,39 +1058,46 @@ async function refreshMe() {
 }
 
 const ROUTES = [
-  [/^#?\/?$/, pageFeed], [/^#\/article\/(\d+)/, pageArticle], [/^#\/sujet\/(\d+)/, pageCompare], [/^#\/recherche\??(.*)/, pageSearch],
-  [/^#\/tendances/, pageTrends], [/^#\/digest/, pageDigest], [/^#\/multimedia/, pageMultimedia], [/^#\/veille/, pageVeille],
-  [/^#\/favoris\??(.*)/, pageFavorites], [/^#\/notifications/, pageNotifications], [/^#\/signalements\??(.*)/, pageReports],
-  [/^#\/sources/, pageSources], [/^#\/admin/, pageAdmin], [/^#\/parametres/, pageSettings], [/^#\/projet/, pageProject], [/^#\/connexion/, pageLogin],
+  [/^\/$/, () => { S.feedCat = ""; return pageFeed(); }, "Prisme : l'actualité comparée, média par média"],
+  [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
+  [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
+  [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
+  [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
+  [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"],
 ];
 async function route() {
-  const h = location.hash || "#/";
+  const h = location.pathname + location.search;
   document.body.classList.remove("reader");
-  $("#sidebar").classList.remove("open");
+  closeDrawer();
   renderNav();
-  for (const [rx, fn] of ROUTES) {
+  for (const [rx, fn, title] of ROUTES) {
     const m = h.match(rx);
     if (m) {
-      try { await fn(...m.slice(1)); } catch (e) { main().innerHTML = `<div class="panel empty">${ico("alert")}<h2>Une erreur est survenue</h2><p>${esc(e.message)}</p></div>`; }
+      if (title) setTitle(title);
+      try { await fn(...m.slice(1)); } catch (e) { main().innerHTML = `<div class="empty">${ico("alert")}<h1>${esc(e.message === "Sujet introuvable." || e.message === "Article introuvable." ? e.message : "Une erreur est survenue")}</h1><p>${esc(e.message)}</p><a class="btn" href="/">Retour à l'accueil</a></div>`; }
       window.scrollTo(0, 0);
       return;
     }
   }
-  main().innerHTML = `<div class="panel empty"><h2>Page introuvable</h2><a class="btn" href="#/">Retour à l'accueil</a></div>`;
+  setTitle("Page introuvable");
+  main().innerHTML = `<div class="empty"><h1>Page introuvable</h1><p>Cette adresse n'existe pas ou plus.</p><a class="btn" href="/">Retour à l'accueil</a></div>`;
 }
 
 (async function start() {
+  if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));   // anciens liens partagés
   $("#menuBtn").innerHTML = ico("menu");
   $("#refreshBtn").innerHTML = ico("refresh");
   $(".search-ico").innerHTML = ico("search");
-  $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
+  $("#menuBtn").onclick = () => ($("#sidebar").classList.contains("open") ? closeDrawer() : openDrawer());
+  $("#drawerBack").onclick = closeDrawer;
   $("#refreshBtn").onclick = () => startRefresh().catch((e) => toast(e.message, 1));
-  $("#quickSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#quickQ").value.trim(); if (q) location.hash = "#/recherche?q=" + encodeURIComponent(q) + "&dedup=1"; };
+  $("#quickSearch").onsubmit = (e) => { e.preventDefault(); const q = $("#quickQ").value.trim(); if (q) nav("/recherche?q=" + encodeURIComponent(q) + "&dedup=1"); };
   S.token = store.get("prisme_token", null);
-  S.cats = await get("/api/categories").catch(() => []);
+  [S.cats, S.config] = await Promise.all([get("/api/categories").catch(() => []), get("/api/config").catch(() => ({}))]);
   await refreshMe();
   applyPrefs();
-  window.addEventListener("hashchange", route);
+  window.addEventListener("popstate", route);
   route();
+  dateline();
   setInterval(() => { if (S.token) refreshMe(); }, 60000);
 })();

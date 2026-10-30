@@ -5,12 +5,24 @@ from collections import Counter, defaultdict
 
 from . import db, nlp
 
+# Les statuts décrivent la couverture observée : Prisme ne certifie pas la véracité d'un fait.
 STATUS_LABEL = {
-    "verifie": "Vérifié", "partiel": "Partiellement vérifié", "non_verifie": "Non vérifié",
-    "conteste": "Contesté", "en_attente": "En attente d'analyse",
+    "verifie": "Repris par 3 sources ou plus", "partiel": "Repris par 2 sources", "non_verifie": "Source unique",
+    "conteste": "Désaccord entre sources", "en_attente": "En attente d'analyse",
 }
-DEBUNK = ("faux", "fausse", "démenti", "dément", "infondé", "infondée", "aucune preuve", "intox", "fake",
-          "rumeur", "n'a jamais", "trompeur", "false", "no evidence", "debunk", "erroné", "erronée")
+REASON_LABEL = {"chiffres": "Chiffres divergents", "dementi": "Démenti signalé"}
+CLAIM_LABEL = {"verifie": "Passage proche dans 2 sources ou plus", "partiel": "Passage proche dans 1 source",
+               "non_verifie": "Aucun passage proche", "conteste": "Version différente"}
+DEBUNK = ("démenti", "dément", "infondé", "infondée", "aucune preuve", "intox", "fake news",
+          "n'a jamais", "no evidence", "debunk", "erroné", "erronée", "fausse information")
+
+
+def status_label(status, source_count=None, reason=None):
+    if status == "conteste":
+        return REASON_LABEL.get(reason, STATUS_LABEL["conteste"])
+    if status == "verifie" and source_count and source_count >= 3:
+        return f"Repris par {source_count} sources"
+    return STATUS_LABEL.get(status, "")
 
 
 def article_text(a):
@@ -21,11 +33,13 @@ def article_text(a):
 #  1. DÉTECTION DES DOUBLONS (clustering par similarité cosinus)
 # =====================================================================
 DUP_THRESHOLD = 0.42
+MERGE_MEAN = 0.30
+EVENT_DAYS = 4
 
 
 @db.write
 def recluster(conn, limit=2000):
-    arts = db.rows(conn, """SELECT a.id, a.title, a.summary, a.language, a.published_at, a.source_id,
+    arts = db.rows(conn, """SELECT a.id, a.title, a.summary, a.language, a.published_at, a.source_id, a.cluster_id, a.is_demo,
                                    s.reliability FROM articles a JOIN sources s ON s.id=a.source_id
                             ORDER BY a.first_seen_at DESC LIMIT ?""", (limit,))
     n = len(arts)
@@ -50,36 +64,64 @@ def recluster(conn, limit=2000):
         for x in range(len(lst)):
             for y in range(x + 1, len(lst)):
                 pair_hits[(lst[x], lst[y])] += 1
+    dates = [db.parse(a["published_at"]) for a in arts]
+    pairs = []
     for (i, j), hits in pair_hits.items():
         if hits < 2 or arts[i]["language"] != arts[j]["language"]:
+            continue
+        # Un événement se couvre en quelques jours (les scénarios de démonstration gardent leur écart).
+        if not (arts[i]["is_demo"] and arts[j]["is_demo"]) and dates[i] and dates[j] and abs((dates[i] - dates[j]).days) > EVENT_DAYS:
             continue
         # Un même média ne publie pas deux fois la même actualité : on n'exige alors
         # une quasi-copie (évite de regrouper les épisodes d'une même série).
         threshold = DUP_THRESHOLD if arts[i]["source_id"] != arts[j]["source_id"] else 0.8
-        if nlp.cosine(vecs[i], vecs[j]) >= threshold:
-            parent[find(i)] = find(j)
+        sim = nlp.cosine(vecs[i], vecs[j])
+        if sim >= threshold:
+            pairs.append((sim, i, j))
+
+    # Regroupement par lien moyen : les meilleures paires d'abord, et une fusion n'est acceptée
+    # que si les deux groupes se ressemblent dans leur ensemble (évite l'enchaînement de sujets voisins).
+    members_of = {i: [i] for i in range(n)}
+    for sim, i, j in sorted(pairs, reverse=True):
+        a, b = find(i), find(j)
+        if a == b:
+            continue
+        cross = [nlp.cosine(vecs[x], vecs[y]) for x in members_of[a] for y in members_of[b]]
+        if sum(cross) / len(cross) >= MERGE_MEAN:
+            parent[a] = b
+            members_of[b] += members_of.pop(a)
 
     groups = defaultdict(list)
     for i in range(n):
         groups[find(i)].append(arts[i])
 
-    conn.execute("UPDATE articles SET cluster_id=NULL")
-    conn.execute("DELETE FROM clusters")
-    for members in groups.values():
-        dates = sorted(a["published_at"] for a in members if a["published_at"])
+    # Les identifiants de sujets restent stables d'une collecte à l'autre : les liens partagés ne cassent pas.
+    taken, assigned = set(), {}
+    for root, members in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        for cid, _ in Counter(a["cluster_id"] for a in members if a["cluster_id"]).most_common():
+            if cid not in taken:
+                taken.add(cid)
+                assigned[root] = cid
+                break
+    for root, members in groups.items():
+        dates_m = sorted(a["published_at"] for a in members if a["published_at"])
         # L'article principal est le plus fiable parmi les publications récentes du sujet
         # (une information ancienne qui recircule ne doit jamais représenter le sujet).
-        latest = db.parse(dates[-1]) if dates else None
+        latest = db.parse(dates_m[-1]) if dates_m else None
         recent = [a for a in members if latest and a["published_at"] and (latest - db.parse(a["published_at"])).days <= 7] or members
         lead = max(recent, key=lambda a: (a["reliability"], a["published_at"] or ""))
-        cur = conn.execute(
-            "INSERT INTO clusters(label, lead_article_id, size, source_count, first_published, last_published) VALUES (?,?,?,?,?,?)",
-            (lead["title"], lead["id"], len(members), len({a["source_id"] for a in members}),
-             dates[0] if dates else None, dates[-1] if dates else None))
-        cid = cur.lastrowid
-        ids = [a["id"] for a in members]
-        conn.execute(f"UPDATE articles SET cluster_id=?, is_cluster_lead=0 WHERE id IN ({','.join('?' * len(ids))})", [cid, *ids])
+        values = (lead["title"], lead["id"], len(members), len({a["source_id"] for a in members}),
+                  dates_m[0] if dates_m else None, dates_m[-1] if dates_m else None)
+        cid = assigned.get(root)
+        if cid:
+            conn.execute("UPDATE clusters SET label=?, lead_article_id=?, size=?, source_count=?, first_published=?, last_published=?, updated_at=datetime('now') WHERE id=?", (*values, cid))
+        else:
+            cid = conn.execute("INSERT INTO clusters(label, lead_article_id, size, source_count, first_published, last_published) VALUES (?,?,?,?,?,?)", values).lastrowid
+            taken.add(cid)
+        conn.executemany("UPDATE articles SET cluster_id=?, is_cluster_lead=0 WHERE id=?", [(cid, m["id"]) for m in members])
         conn.execute("UPDATE articles SET is_cluster_lead=1 WHERE id=?", (lead["id"],))
+    if taken:
+        conn.execute(f"DELETE FROM clusters WHERE id NOT IN ({','.join(str(c) for c in taken)})")
     conn.commit()
     return {"articles": n, "clusters": len(groups), "duplicates": n - len(groups)}
 
@@ -124,22 +166,44 @@ def _stance(claim, cand, sim, cand_reliability):
     cand_debunk = any(d in cand.lower() for d in DEBUNK)
     if cand_debunk and claim_debunk:
         return "soutient"                      # deux démentis convergents
-    if cand_debunk and sim >= 0.25:
+    if cand_debunk and sim >= 0.35:
         return "contredit"
     if claim_debunk:
         # la phrase candidate relaie la rumeur démentie : elle ne confirme pas le démenti
         return "neutre" if cand_reliability < 55 else ("soutient" if sim >= 0.38 else "neutre")
-    cn = [(v, u) for v, u in nlp.numbers(claim) if u]
-    dn = nlp.numbers(cand)
+    cn = nlp.firm_numbers(claim)
     if cn:
+        firm, stated = nlp.firm_numbers(cand), nlp.numbers(cand)
         for val, unit in cn:
-            same_unit = [v for v, u in dn if u == unit]
-            if any(abs(v - val) <= max(abs(val) * 0.02, 0.01) for v in same_unit):
+            if any(u == unit and abs(v - val) <= max(abs(val) * 0.02, 0.01) for v, u in stated):
                 return "soutient"
-            if same_unit and sim >= 0.30:
+            # Seuls deux chiffres arrêtés se contredisent : « au moins 60 morts » n'infirme pas « 68 morts ».
+            if any(u == unit for _, u in firm) and sim >= 0.30:
                 return "contredit"
         return "neutre" if sim < 0.6 else "soutient"   # chiffre non repris : pas de confirmation
     return "soutient" if sim >= 0.38 else "neutre"
+
+
+def _coverage_status(others):
+    """Statut déduit du nombre d'autres médias couvrant le même événement."""
+    return "verifie" if others >= 2 else "partiel" if others == 1 else "non_verifie"
+
+
+def _dispute_reason(conn, article_id):
+    texts = db.rows(conn, """SELECT e.excerpt FROM evidences e JOIN claims c ON c.id=e.claim_id
+                             WHERE c.article_id=? AND c.status='conteste' AND e.stance='contredit'""", (article_id,))
+    return "dementi" if any(any(d in t["excerpt"].lower() for d in DEBUNK) for t in texts) else "chiffres"
+
+
+@db.write
+def refresh_statuses(conn):
+    """La couverture évolue à chaque collecte : les statuts suivent, sauf en cas de désaccord signalé."""
+    conn.execute("""UPDATE articles SET verification_status=CASE
+                        WHEN (SELECT COUNT(DISTINCT x.source_id) FROM articles x WHERE x.cluster_id=articles.cluster_id AND x.source_id<>articles.source_id) >= 2 THEN 'verifie'
+                        WHEN (SELECT COUNT(DISTINCT x.source_id) FROM articles x WHERE x.cluster_id=articles.cluster_id AND x.source_id<>articles.source_id) = 1 THEN 'partiel'
+                        ELSE 'non_verifie' END
+                    WHERE verification_status NOT IN ('conteste','en_attente')""")
+    conn.commit()
 
 
 @db.write
@@ -184,16 +248,16 @@ def verify_article(conn, article_id):
         contra = [e for e in evid if e[2] == "contredit" and e[0]["reliability"] >= 55]
         if contra and (len(contra) >= len(support) or "rumeur" in types):
             status, conf = "conteste", 70 + 10 * min(len(contra), 2)
-            why = f"{len(contra)} source(s) fiable(s) rapportent une version différente ou démentent l'affirmation."
+            why = f"{len(contra)} autre(s) source(s) rapportent une version différente ou un démenti."
         elif len(support) >= 2:
             status, conf = "verifie", min(95, 70 + 10 * len(support))
-            why = f"Corroborée par {len(support)} sources indépendantes."
+            why = f"Un passage proche figure chez {len(support)} autres médias. Cela indique une reprise, pas une preuve."
         elif len(support) == 1:
             status, conf = "partiel", 55
-            why = f"Une seule source indépendante ({support[0][0]['source_name']}) rapporte la même information."
+            why = f"Un passage proche figure chez un autre média ({support[0][0]['source_name']})."
         else:
             status, conf = "non_verifie", 35 if "rumeur" not in types else 20
-            why = "Aucune source indépendante trouvée dans le corpus agrégé."
+            why = "Aucun passage proche chez les autres médias suivis par Prisme."
             if "rumeur" in types:
                 why += " Formulation conditionnelle ou sensationnaliste détectée."
         cur = conn.execute("INSERT INTO claims(article_id, position, sentence, claim_types, status, confidence, rationale) VALUES (?,?,?,?,?,?,?)",
@@ -217,16 +281,14 @@ def verify_article(conn, article_id):
         score = min(score, 45)                 # information ancienne qui recircule : non confirmée pour l'actualité
     score = max(0, min(100, score))
     contested = claim_scores.count(0)
+    status, reason = _coverage_status(corroborating), None
     if contested and (contested * 3 >= len(claim_scores) or rel < 50):
-        status = "conteste"
-    elif score >= 72:
-        status = "verifie"
-    elif score >= 50:
-        status = "partiel"
-    else:
-        status = "non_verifie"
-    conn.execute("UPDATE articles SET verification_status=?, verification_score=?, verified_at=? WHERE id=?",
-                 (status, score, db.now_str(), article_id))
+        status, reason = "conteste", _dispute_reason(conn, article_id)
+    previous = art["verification_status"]
+    conn.execute("UPDATE articles SET verification_status=?, verification_score=?, verified_at=?, status_reason=? WHERE id=?",
+                 (status, score, db.now_str(), reason, article_id))
+    if previous != status and previous != "en_attente":
+        db.log_change(conn, "moteur", "article", article_id, "statut", f"{previous} -> {status}")
     conn.commit()
     return {"status": status, "score": score}
 
@@ -235,13 +297,15 @@ def verify_pending(conn, limit=400):
     ids = [r["id"] for r in db.rows(conn, "SELECT id FROM articles WHERE verification_status='en_attente' ORDER BY first_seen_at DESC LIMIT ?", (limit,))]
     for i in ids:
         verify_article(conn, i)
+    _VEC.clear()
+    _SENT.clear()    # caches libérés après chaque lot : la mémoire reste bornée en production
     return len(ids)
 
 
 def get_verification(conn, article_id):
     claims = db.rows(conn, "SELECT * FROM claims WHERE article_id=? ORDER BY position", (article_id,))
     for c in claims:
-        c["status_label"] = STATUS_LABEL[c["status"]]
+        c["status_label"] = CLAIM_LABEL[c["status"]]
         c["evidences"] = db.rows(conn, """SELECT e.*, a.title, a.url, a.published_at, s.name source_name, s.reliability
                                           FROM evidences e JOIN articles a ON a.id=e.article_id JOIN sources s ON s.id=a.source_id
                                           WHERE e.claim_id=? ORDER BY e.similarity DESC""", (c["id"],))
@@ -325,7 +389,8 @@ def compare_cluster(conn, cluster_id):
             "unique_keywords": [k for k in kw_sets[a["id"]] if counts[k] == 1][:6],
             "numbers": list(dict.fromkeys(f"{v:g}{(' ' + u) if u else ''}" for v, u in nlp.numbers(txt) if u))[:6],
             "claims": dict(st), "verification_status": a["verification_status"],
-            "verification_label": STATUS_LABEL[a["verification_status"]],
+            "verification_label": status_label(a["verification_status"], cl["source_count"], a.get("status_reason")),
+            "is_demo": a["is_demo"],
         })
     # Divergences chiffrées : même unité, valeurs différentes selon les médias
     by_unit = defaultdict(lambda: defaultdict(set))
@@ -346,7 +411,7 @@ def compare_cluster(conn, cluster_id):
 # =====================================================================
 WEIGHTS = {"interet": 0.30, "fraicheur": 0.25, "fiabilite": 0.15, "couverture": 0.15, "mots_cles": 0.10, "historique": 0.05}
 LABELS = {"interet": "Correspond à vos centres d'intérêt", "fraicheur": "Information récente",
-          "fiabilite": "Source jugée fiable", "couverture": "Sujet couvert par plusieurs médias",
+          "fiabilite": "Pondération de la source", "couverture": "Sujet couvert par plusieurs médias",
           "mots_cles": "Contient un mot-clé que vous suivez", "historique": "Proche de vos lectures récentes"}
 
 
@@ -415,10 +480,12 @@ def explain(a, profile, now):
         if d["key"] == "couverture":
             txt += f" ({a.get('source_count') or 1} sources)"
         if d["key"] == "fiabilite":
+            if not a.get("is_demo"):
+                continue
             txt += f" ({a['source_name']} : {a['source_reliability']}/100)"
         reasons.append(txt)
     if a["verification_status"] == "conteste":
-        reasons.append("Rang abaissé : des affirmations de cet article sont contestées")
+        reasons.append("Rang abaissé : d'autres médias rapportent une version différente")
     return {"score": round(score * 100, 1), "components": details, "reasons": reasons, "discovery": False}
 
 
@@ -485,7 +552,7 @@ def decorate(conn, a, now=None):
     if a.get("cluster_id"):
         latest = db.parse(db.scalar(conn, "SELECT MAX(published_at) FROM articles WHERE cluster_id=?", (a["cluster_id"],)))
     a["freshness"] = nlp.freshness(pub, seen, now, latest)
-    a["verification_label"] = STATUS_LABEL.get(a["verification_status"], "")
+    a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"))
     a["reports_count"] = db.scalar(conn, "SELECT COUNT(*) FROM reports WHERE article_id=? AND status IN ('en_attente','en_cours')", (a["id"],))
     if a.get("cluster_id"):
         a["others"] = db.rows(conn, """SELECT a.id, a.title, a.url, a.published_at, s.name source_name FROM articles a

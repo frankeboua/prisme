@@ -1,0 +1,2 @@
+# Le code applicatif n'utilise que la bibliothèque standard ; gunicorn sert uniquement en production.
+gunicorn==23.0.0

@@ -132,6 +132,18 @@ def numbers(sentence):
     return out
 
 
+HEDGE = re.compile(r"\b(au moins|au minimum|plus de|près de|environ|quelque|au total|at least|more than|nearly|about|around|over)\s+$", re.I)
+
+
+def firm_numbers(sentence):
+    """Chiffres avec unité affirmés tels quels (« au moins 60 morts » n'est pas un chiffre arrêté)."""
+    out = []
+    for m in re.finditer(r"(\d+(?:[\s.]\d{3})*(?:[.,]\d+)?)\s?(%|pour ?cent|milliards?|millions?|fcfa|euros?|dollars?|morts?|décès|victimes|mw)", sentence, re.I):
+        if not HEDGE.search(sentence[max(0, m.start() - 14):m.start()]):
+            out.extend(numbers(m.group(0)))
+    return out
+
+
 def claim_types(sentence):
     return [k for k, rx in CLAIM_PATTERNS.items() if rx.search(sentence)]
 
@@ -218,7 +230,7 @@ def simplify(text, glossary):
 
 def classify(text, slugs_to_ids, default=None):
     toks = set(tokens(text))
-    best, best_score = default, 0
+    best, best_score = default, 1 if default else 0   # un seul mot isolé ne contredit pas la rubrique du média
     for slug, kw in CATEGORY_KEYWORDS.items():
         kws = {stem(deaccent(k)) for k in kw.split()}
         score = len(toks & kws)

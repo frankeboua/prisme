@@ -3,39 +3,58 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prisme — Agrégateur des nouveaux médias</title>
-  <meta name="description" content="Prisme : agrégateur intelligent d'actualités — ESATIC TWIN3, Groupe 7">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 29 27H3Z' fill='%234f46e5'/%3E%3Cpath d='M16 3 22 27H10Z' fill='%2306b6d4' opacity='.8'/%3E%3C/svg%3E">
+  <title><!--TITLE--></title>
+  <!--META-->
+  <meta name="theme-color" content="#f7f3ea">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/Fraunces.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <a class="skip" href="#main">Aller au contenu</a>
-  <div class="layout">
-    <aside class="sidebar" id="sidebar" aria-label="Navigation principale">
-      <a class="brand" href="#/">
-        <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><path d="M16 3 29 27H3Z" fill="#4f46e5"/><path d="M16 3 22 27H10Z" fill="#06b6d4" opacity=".85"/><path d="M16 3 18 27h-4Z" fill="#fff" opacity=".5"/></svg>
-        <span><strong>Prisme</strong><small>L'info sous tous ses angles</small></span>
-      </a>
-      <nav id="nav"></nav>
-      <div class="side-foot">ESATIC · TWIN 3 · Groupe 7</div>
-    </aside>
-    <div class="main-col">
-      <header class="topbar">
-        <button class="icon-btn only-mobile" id="menuBtn" aria-label="Ouvrir le menu"></button>
-        <form class="search" id="quickSearch" role="search">
-          <span class="search-ico"></span>
-          <input id="quickQ" type="search" placeholder="Rechercher une actualité, une source, un auteur…" aria-label="Recherche">
-        </form>
-        <button class="icon-btn" id="refreshBtn" title="Actualiser les flux RSS" aria-label="Actualiser les flux"></button>
-        <a class="icon-btn notif" id="notifBtn" href="#/notifications" title="Notifications" aria-label="Notifications"></a>
-        <div id="userBox"></div>
-      </header>
-      <main id="main" tabindex="-1"></main>
+  <header class="masthead">
+    <div class="mast-top">
+      <button class="icon-btn" id="menuBtn" aria-label="Ouvrir le menu" aria-expanded="false" aria-controls="sidebar"></button>
+      <form class="search" id="quickSearch" role="search" action="/recherche">
+        <span class="search-ico"></span>
+        <input id="quickQ" name="q" type="search" placeholder="Rechercher un sujet, un média, un auteur" aria-label="Rechercher">
+      </form>
+      <span class="grow"></span>
+      <button class="icon-btn" id="refreshBtn" title="Lancer une collecte" aria-label="Lancer une collecte des flux" hidden></button>
+      <a class="icon-btn notif" id="notifBtn" href="/notifications" title="Notifications" aria-label="Notifications"></a>
+      <div id="userBox"></div>
     </div>
-  </div>
+    <div class="mast-brand">
+      <a class="brand" href="/" aria-label="Prisme, accueil">
+        <svg viewBox="0 0 40 36" width="30" height="27" aria-hidden="true"><path d="M20 2 38 34H2Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg>
+        <span class="wordmark">Prisme</span>
+      </a>
+      <p class="tagline">L'actualité comparée, média par média</p>
+      <p class="dateline" id="dateline"></p>
+    </div>
+    <div class="spectrum" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <nav class="rubrics" id="rubrics" aria-label="Rubriques"><a href="/">À la une</a><!--RUBRICS--></nav>
+  </header>
+
+  <div class="drawer-back" id="drawerBack" hidden></div>
+  <aside class="sidebar" id="sidebar" aria-label="Menu principal">
+    <nav id="nav"></nav>
+    <div class="side-foot">Projet ESATIC · TWIN 3 · Groupe 7</div>
+  </aside>
+
+  <main id="main" tabindex="-1"><!--MAIN--></main>
+
+  <footer class="site-foot">
+    <div>
+      <b>Prisme</b> réunit les articles de plusieurs médias et renvoie toujours vers la source originale.
+      Il mesure la couverture d'un événement, il ne certifie pas les faits.
+    </div>
+    <nav aria-label="Pied de page"><a href="/methode">Notre méthode</a><a href="/sources">Médias suivis</a><a href="/projet">Le projet</a><a href="/parametres">Accessibilité</a></nav>
+  </footer>
+
   <div id="player" class="player" hidden></div>
   <div id="modal" class="modal" hidden></div>
-  <div id="toasts" class="toasts" aria-live="polite"></div>
-  <script src="/app.js"></script>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
 </body>
 </html>

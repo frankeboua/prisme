@@ -1,0 +1,7 @@
+.git
+database/*.db*
+docs
+__pycache__
+tests
+*.bat
+web/media

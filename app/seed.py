@@ -1,5 +1,6 @@
 """Jeu de données initial : référentiels, sources réelles, contenus de démonstration, comptes."""
 import hashlib
+import hmac
 import math
 import os
 import secrets
@@ -16,7 +17,7 @@ CATEGORIES = [
     ("culture", "Culture", "#f59e0b"), ("environnement", "Environnement", "#10b981"), ("international", "International", "#64748b"),
 ]
 
-NOTE = "Score indicatif paramétrable par l'administrateur (critères : transparence éditoriale, politique de rectification, signature des contenus)."
+NOTE = None
 # nom, site, flux, pays, langue, type, catégorie par défaut, fiabilité, certifiée
 REAL_SOURCES = [
     ("France 24", "https://www.france24.com", "https://www.france24.com/fr/rss", "France", "fr", "tv", "international", 85, 1),
@@ -275,10 +276,20 @@ REPORTS = [
 CORRECTIONS = {"E1": "Information démentie par le ministère de la Santé : aucune plante ne guérit le paludisme en 24 heures. Consultez l'article d'Abidjan Matin du même jour."}
 
 
+PBKDF2_ROUNDS = 600_000
+
+
 def hash_password(password, salt=None):
     salt = salt or secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
-    return h, salt
+    h = hashlib.pbkdf2_hmac("sha256", str(password).encode(), salt.encode(), PBKDF2_ROUNDS).hex()
+    return f"{PBKDF2_ROUNDS}${h}", salt
+
+
+def check_password(password, stored, salt):
+    """Vérifie un mot de passe (les anciennes empreintes à 120 000 itérations restent acceptées)."""
+    rounds, _, digest = stored.rpartition("$")
+    h = hashlib.pbkdf2_hmac("sha256", str(password).encode(), salt.encode(), int(rounds or 120_000)).hex()
+    return hmac.compare_digest(h, digest)
 
 
 def make_demo_audio(path, seconds=24):
@@ -298,6 +309,37 @@ def make_demo_audio(path, seconds=24):
                 v = sum(math.sin(2 * math.pi * f * t) for f in ch) / 3 * env * 0.25
                 frames += struct.pack("<h", int(v * 32767))
         w.writeframes(bytes(frames))
+
+
+@db.write
+def seed_public(conn, admin_user=None, admin_password=None):
+    """Base de production : référentiels et médias réels uniquement, aucun contenu ni compte fictif."""
+    cat = {}
+    for slug, name, color in CATEGORIES:
+        cat[slug] = conn.execute("INSERT INTO categories(slug, name, color) VALUES (?,?,?)", (slug, name, color)).lastrowid
+    for name, site, feed, country, lang, kind, dcat, _rel, _cert in REAL_SOURCES:
+        conn.execute("""INSERT INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                        VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cat.get(dcat)))
+    for term, simple, definition in GLOSSARY:
+        conn.execute("INSERT INTO glossary(term, simple, definition) VALUES (?,?,?)", (term, simple, definition))
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('neutral_sources', '1')")
+    conn.commit()
+    ensure_admin(conn, admin_user, admin_password)
+
+
+@db.write
+def ensure_admin(conn, username, password):
+    """Crée ou met à jour le compte administrateur défini par les variables d'environnement."""
+    if not username or not password:
+        return
+    h, salt = hash_password(password)
+    u = db.row(conn, "SELECT id FROM users WHERE username=?", (username,))
+    if u:
+        conn.execute("UPDATE users SET password_hash=?, salt=?, role='admin' WHERE id=?", (h, salt, u["id"]))
+    else:
+        conn.execute("INSERT INTO users(username, email, display_name, password_hash, salt, role) VALUES (?,?,?,?,?,'admin')",
+                     (username, f"{username}@prisme.invalid", "Administration Prisme", h, salt))
+    conn.commit()
 
 
 @db.write
