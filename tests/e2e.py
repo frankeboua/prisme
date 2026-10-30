@@ -23,7 +23,7 @@ AUDIT = """() => {
     h1: q('h1').filter(e => !e.closest('[hidden]')).length,
     overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     noLabel: q('input,select,textarea').filter(e => e.type !== 'hidden' && !e.labels?.length && !e.getAttribute('aria-label')).length,
-    noName: q('button,a').filter(e => e.offsetParent && !(e.textContent||'').trim() && !e.getAttribute('aria-label') && !e.getAttribute('title')).length,
+    noName: q('button,a').filter(e => e.offsetParent && e.getAttribute('aria-hidden') !== 'true' && !(e.textContent||'').trim() && !e.getAttribute('aria-label') && !e.getAttribute('title')).length,
     imgNoAlt: q('img:not([alt])').length,
   };
 }"""
@@ -61,7 +61,7 @@ with sync_playwright() as p:
     check("navigation sans rechargement", page.evaluate("window.__spa") == 1)
     page.screenshot(path=os.path.join(OUT, f"{MODE}_article.png"))
     page.wait_for_selector("#toolBody ol, #toolBody .empty, #toolBody .alert-line")
-    check("résumé marqué comme automatique", page.locator("#toolBody .badge", has_text="Extraction automatique").count() >= 0)
+    check("résumé marqué comme automatique", page.locator("#toolBody .badge", has_text="Extraction automatique").count() == 1 or page.locator("#toolBody .empty").count() == 1)
     page.locator("[data-tool=verify]").click()
     check("onglet Recoupement", page.locator("#toolBody h3", has_text="Passages proches").count() == 1)
     page.go_back()
@@ -69,6 +69,10 @@ with sync_playwright() as p:
     check("bouton Précédent du navigateur", page.url.rstrip("/") == BASE)
 
     # Sujet multi-sources
+    try:
+        page.wait_for_selector(".topic a.go", timeout=8000)
+    except Exception:
+        pass
     link = page.locator(".topic a.go").first
     if link.count():
         link.click()
@@ -97,8 +101,8 @@ with sync_playwright() as p:
     page.wait_for_selector("#feedList .card")
     check("onglet Les plus récents", True)
     page.select_option("#mediaSel", "podcast")
-    page.wait_for_function("document.querySelector('#mediaSel')?.value === 'podcast' && document.querySelectorAll('#feedList .card').length > 0")
-    check("filtre par format", True)
+    page.wait_for_selector('#feedList .card'); page.wait_for_timeout(800)
+    check("filtre par format", page.evaluate("document.querySelector(\"#mediaSel\").value") == "podcast" and page.locator("#feedList .card").count() > 0)
     page.select_option("#mediaSel", "")
     page.locator("[data-mode=pour_vous]").click()
 
@@ -182,7 +186,7 @@ with sync_playwright() as p:
         page.goto(BASE + "/connexion", wait_until="networkidle")
         page.locator("[data-act=demo][data-u=admin]").click()
         page.wait_for_selector(".user-chip")
-        page.wait_for_function("location.pathname === '/'")
+        page.wait_for_timeout(800)
         page.goto(BASE + "/admin", wait_until="networkidle")
         check("administration : tableau de bord", page.locator(".kpi").count() == 4)
         page.screenshot(path=os.path.join(OUT, "demo_admin.png"))

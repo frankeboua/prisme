@@ -717,9 +717,9 @@ async function pageSettings() {
       <div class="panel">
         <h2>${ico("eye")} Accessibilité et confort de lecture</h2>
         <label class="f"><span>Taille du texte : <b id="fsv">${Math.round(p.font_scale * 100)} %</b></span><input type="range" id="fs" min="0.85" max="1.6" step="0.05" value="${p.font_scale}"></label>
-        <div class="switch"><div><b>Thème</b><div class="small muted">Clair, sombre ou selon le système</div></div><select class="input" id="theme" style="width:auto">${[["auto", "Automatique"], ["light", "Clair"], ["dark", "Sombre"]].map(([k, l]) => `<option value="${k}" ${p.theme === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-        <div class="switch"><div><b>Contraste élevé</b><div class="small muted">Pour les personnes malvoyantes</div></div><input type="checkbox" id="hc" ${p.high_contrast ? "checked" : ""}></div>
-        <div class="switch"><div><b>Mode simplifié</b><div class="small muted">Grands boutons et libellés toujours visibles</div></div><input type="checkbox" id="sm" ${p.simple_mode ? "checked" : ""}></div>
+        <div class="switch"><div><b>Thème</b><div class="small muted">Clair, sombre ou selon le système</div></div><select class="input" id="theme" aria-label="Thème" style="width:auto">${[["auto", "Automatique"], ["light", "Clair"], ["dark", "Sombre"]].map(([k, l]) => `<option value="${k}" ${p.theme === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <div class="switch"><div><b>Contraste élevé</b><div class="small muted">Pour les personnes malvoyantes</div></div><input type="checkbox" id="hc" aria-label="Contraste élevé" ${p.high_contrast ? "checked" : ""}></div>
+        <div class="switch"><div><b>Mode simplifié</b><div class="small muted">Grands boutons et libellés toujours visibles</div></div><input type="checkbox" id="sm" aria-label="Mode simplifié" ${p.simple_mode ? "checked" : ""}></div>
         <button class="btn primary" id="saveA" style="margin-top:10px">${ico("check")} Enregistrer</button>
       </div>
       ${u ? `<div class="panel">
@@ -768,6 +768,7 @@ const PERSONAS = [
 ];
 function pageLogin() {
   main().innerHTML = `
+    <h1 style="text-align:center;margin-bottom:20px">Votre compte Prisme</h1>
     <div class="auth-wrap">
       <div class="panel">
         <div class="tabs"><button class="tab active" data-act="authtab" data-t="login">Connexion</button><button class="tab" data-act="authtab" data-t="register">Créer un compte</button></div>

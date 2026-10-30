@@ -26,7 +26,8 @@ from app import db, engine, nlp, pages, rss, seed, translate
 
 PORT = int(os.environ.get("PORT") or os.environ.get("PRISME_PORT") or "8765")
 PUBLIC = os.environ.get("PRISME_MODE") == "public"     # production : ni contenu ni compte de démonstration
-SITE_URL = (os.environ.get("PRISME_SITE_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+SITE_URL = (os.environ.get("PRISME_SITE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+            or (f"https://{os.environ['RAILWAY_PUBLIC_DOMAIN']}" if os.environ.get("RAILWAY_PUBLIC_DOMAIN") else "")).rstrip("/")
 REFRESH_MINUTES = int(os.environ.get("PRISME_REFRESH_MINUTES", "30"))
 MAX_BODY = 1024 * 1024
 WEB = os.path.join(db.ROOT, "web")
@@ -904,6 +905,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = _serve
+
+    def handle(self):
+        try:
+            super().handle()
+        except ConnectionError:
+            pass   # le visiteur a fermé la page avant la fin de la réponse
 
 
 def bootstrap():
