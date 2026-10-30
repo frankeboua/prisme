@@ -439,9 +439,12 @@ async function tool(name) {
   $$("#toolTabs [data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
   const box = $("#toolBody");
   box.innerHTML = `<div class="muted">${ico("ai")} Analyse en cours…</div>`;
+  const run = (S.toolRun = (S.toolRun || 0) + 1);
+  const outdated = () => run !== S.toolRun;   // l'onglet a changé pendant le chargement : la réponse tardive est ignorée
   try {
     if (name === "summary") {
       const s = await get(`/api/articles/${a.id}/summary`);
+      if (outdated()) return;
       box.innerHTML = s.sentences.length ? `
         <div class="row between" style="margin-bottom:8px"><h3 style="margin:0">Résumé généré automatiquement</h3><span class="badge b-info">${ico("ai")} Extraction automatique</span></div>
         <ol class="sum-list">${s.sentences.map((x) => `<li>${esc(x.text)}<button class="cite" data-act="cite" data-n="${x.cite}" title="Voir la source">${x.cite}</button></li>`).join("")}</ol>
@@ -453,6 +456,7 @@ async function tool(name) {
     } else if (name === "translate") {
       const dst = a.language === "fr" ? "en" : "fr";
       const langs = await get("/api/languages");
+      if (outdated()) return;
       box.innerHTML = `<div class="row" style="margin-bottom:12px"><span class="small muted">Langue d'origine : <b>${esc(langs.languages[a.language] || a.language.toUpperCase())}</b></span>
         <label class="sr" for="trLang">Traduire en</label>
         <select class="input" id="trLang" style="width:auto">${Object.entries(langs.languages).filter(([k]) => k !== a.language).sort((x, y) => x[1].localeCompare(y[1], "fr")).map(([k, l]) => `<option value="${k}" ${k === dst ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
@@ -471,6 +475,7 @@ async function tool(name) {
       if (a.language !== "fr") go();
     } else if (name === "simplify") {
       const s = await get(`/api/articles/${a.id}/simplify`);
+      if (outdated()) return;
       let txt = esc(s.text);
       s.glossary.forEach((g) => { txt = txt.replace(new RegExp(esc(g.simple).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), (m) => `<span class="gloss" title="Terme d'origine : ${esc(g.term)}">${m}</span>`); });
       box.innerHTML = `
@@ -485,7 +490,7 @@ async function tool(name) {
       box.innerHTML = `<div class="why" style="background:none;padding:0">${whyHtml(a.why)}</div>
         <p class="small muted" style="margin-top:12px">${ico("info")} Transparence : Prisme n'utilise aucun critère caché. Le score combine six critères pondérés, et une part du fil est réservée à des sujets hors de vos habitudes. Vous pouvez modifier vos intérêts dans les <a href="/parametres">paramètres</a> ou effacer votre historique à tout moment.</p>`;
     }
-  } catch (e) { box.innerHTML = `<div class="alert-line bad">${ico("alert")}${esc(e.message)}</div>`; }
+  } catch (e) { if (!outdated()) box.innerHTML = `<div class="alert-line bad">${ico("alert")}${esc(e.message)}</div>`; }
 }
 
 const CLAIM_TYPES = { chiffre: "Donnée chiffrée", citation: "Citation", attribution: "Attribution", causalite: "Lien de causalité", absolu: "Formulation absolue", rumeur: "Formulation conditionnelle / rumeur" };
@@ -594,12 +599,19 @@ async function pageSearch(params) {
   const r = await get("/api/search?" + query);
   const box = $("#results");
   if (!box) return;
+  const webLink = q ? `<a href="https://news.google.com/search?${new URLSearchParams({ q, hl: "fr", gl: "CI", ceid: "CI:fr" })}" target="_blank" rel="noopener">${ico("ext")} Chercher « ${esc(q)} » sur Google Actualités</a>` : "";
   if (!r.total) {
-    box.innerHTML = `<div class="empty">${ico("search")}<h2>Aucun article trouvé${q ? ` pour « ${esc(q)} »` : ""}</h2><p>Essayez un mot plus simple, retirez un filtre ou choisissez « Toutes les dates ». Prisme ne garde que les articles récents de ses médias.</p></div>`;
+    const words = await get("/api/trends").then((t) => t.keywords.slice(0, 8).map((k) => k.word)).catch(() => []);
+    box.innerHTML = `<div class="empty">${ico("search")}<h2>Rien pour l'instant${q ? ` sur « ${esc(q)} »` : ""}</h2>
+      <p>Prisme ne connaît que les ${r.known_articles} articles récents de ses médias : si aucun n'en parle aujourd'hui, le mot ne sort pas. Votre recherche n'est pas en cause.</p>
+      ${webLink ? `<p>${webLink}</p>` : ""}
+      ${words.length ? `<p class="small">Dans l'actualité en ce moment :</p><div class="chips" style="justify-content:center">${words.map((x) => `<a class="chip" href="/recherche?q=${encodeURIComponent(x)}">${esc(x)}</a>`).join("")}</div>` : ""}</div>`;
     return;
   }
   box.innerHTML = `<div class="sec-title" style="margin-top:0"><h2>${r.total >= 200 ? "Plus de 200" : r.total} résultat${r.total > 1 ? "s" : ""}${q ? ` pour « ${esc(q)} »` : ""}</h2></div>
-    ${r.relaxed ? `<div class="alert-line info" style="margin-bottom:14px">${ico("info")}<span>Aucun article ne contient tous vos mots. Voici ceux qui en contiennent au moins un.</span></div>` : ""}` + cards(r.items);
+    ${r.corrected ? `<div class="alert-line info" style="margin-bottom:14px">${ico("info")}<span>Aucun résultat pour « ${esc(q)} ». Voici les résultats pour <b>${esc(r.corrected)}</b>.</span></div>` : ""}
+    ${r.relaxed ? `<div class="alert-line info" style="margin-bottom:14px">${ico("info")}<span>Aucun article ne contient tous vos mots. Voici ceux qui en contiennent au moins un.</span></div>` : ""}` + cards(r.items)
+    + (webLink ? `<p class="small" style="text-align:center;margin-top:24px">${webLink}</p>` : "");
 }
 
 async function pageTrends() {
@@ -741,7 +753,7 @@ async function pageSources() {
   const list = await get("/api/sources");
   const admin = S.user && S.user.role === "admin";
   main().innerHTML = `
-    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias et renvoie toujours vers l'article original. Il ne note pas les médias.</p></div>
+    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias, parfois plusieurs par rubrique pour un même média, et renvoie toujours vers l'article original. Il ne note pas les médias.</p></div>
       ${admin ? `<button class="btn primary" data-act="addsource">${ico("plus")} Ajouter un flux RSS</button>` : ""}</div>
     <div class="panel table-wrap" style="padding:0"><table class="t">
       <thead><tr><th>Média</th><th>Type</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>

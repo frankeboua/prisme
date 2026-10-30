@@ -1,5 +1,6 @@
 """Accès à la base de données SQLite (couche d'accès aux données)."""
 import os
+import re
 import sqlite3
 import threading
 import unicodedata
@@ -14,9 +15,10 @@ _local = threading.local()
 
 
 def normalize(text):
-    """Minuscules, sans accents ni apostrophes : « Côte d’Ivoire » et « cote d ivoire » deviennent identiques."""
+    """Minuscules, sans accents ni ponctuation : « Côte d’Ivoire » et « cote d ivoire » deviennent identiques."""
     t = unicodedata.normalize("NFD", text or "")
-    return "".join(c for c in t if unicodedata.category(c) != "Mn").lower().replace("’", " ").replace("'", " ").replace("-", " ")
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn").lower()
+    return f' {" ".join(re.findall(r"[a-z0-9]+", t))} '    # espaces aux bords : permet de chercher un mot entier
 
 
 def connect():
@@ -82,7 +84,8 @@ def migrate(conn):
 def fill_publishers(conn):
     """Regroupe les flux d'un même éditeur : Le Monde Afrique et Le Monde à la une sont un seul média."""
     conn.execute("""UPDATE sources SET publisher = CASE WHEN name LIKE 'Le Monde%' THEN 'Le Monde' WHEN name LIKE 'BBC%' THEN 'BBC'
-                                                        WHEN name LIKE 'Radio France%' THEN 'Radio France' ELSE name END
+                                                        WHEN name LIKE 'Radio France%' THEN 'Radio France' WHEN name LIKE 'France 24%' THEN 'France 24'
+                                                        WHEN name LIKE 'RFI%' THEN 'RFI' WHEN name LIKE 'Franceinfo%' THEN 'Franceinfo' ELSE name END
                     WHERE publisher IS NULL""")
 
 

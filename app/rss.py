@@ -143,6 +143,9 @@ def store(conn, src, items, slug_ids):
     for it in items[:60]:
         if not it["title"]:
             continue
+        # Le même article peut figurer dans plusieurs flux d'un média : il n'est gardé qu'une fois.
+        if it["url"] and conn.execute("SELECT 1 FROM articles WHERE url=?", (it["url"],)).fetchone():
+            continue
         guid = hashlib.sha1(f"{src['id']}|{it['guid'] or it['url'] or it['title']}".encode()).hexdigest()
         body = nlp.strip_html(it["content"] or it["summary"])
         cat = nlp.classify(it["title"] + " " + body, slug_ids, src["default_category"])

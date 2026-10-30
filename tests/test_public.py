@@ -279,6 +279,37 @@ class SearchHelp(Case):
         both = [a["id"] for a in call(server, "GET", "/api/search?q=kaolack&dedup=1")[2]["items"]]
         self.assertEqual(len([i for i in both if i in (lead, echo)]), 1)
 
+    def test_short_words_match_whole_words_only(self):
+        wrong = add_article(src[0], "ia1", "Binance et la Californie face aux média", "Rien sur le sujet.")
+        right = add_article(src[1], "ia2", "L'IA arrive dans les écoles", "Nouveaux outils.")
+        full = add_article(src[2], "ia3", "L'intelligence artificielle à l'université", "Nouveaux cours.")
+        found = self.found("ia")
+        self.assertNotIn(wrong, found)
+        self.assertIn(right, found)
+        self.assertIn(full, found)
+
+    def test_word_forms_find_each_other(self):
+        aid = add_article(src[0], "fo1", "Le président ivoirien et l'équipe présidentielle à Korhogo", "Visite officielle.")
+        for q in ("ivoirienne", "ivoiriens", "ivoirien", "présidentiel", "presidentielle"):
+            self.assertIn(aid, self.found(q), q)
+
+    def test_typo_is_corrected_and_reported(self):
+        aid = add_article(src[0], "ty1", "Yamoussoukro accueille le salon des bâtisseurs", "Un salon consacré aux bâtisseurs de Yamoussoukro.")
+        server._vocabulary.clear()
+        res = call(server, "GET", "/api/search?q=yamoussoukroo")[2]
+        self.assertEqual(res["corrected"], "yamoussoukro")
+        self.assertIn(aid, [a["id"] for a in res["items"]])
+        none = call(server, "GET", "/api/search?q=zzzqqqwww")[2]
+        self.assertEqual((none["total"], none["corrected"]), (0, None))
+        self.assertGreater(none["known_articles"], 0)
+
+    def test_search_reads_full_text(self):
+        with db._lock:
+            aid = CONN.execute("""INSERT INTO articles(source_id, guid, title, summary, content, language, published_at)
+                                  VALUES (?,?,?,?,?,'fr',?)""", (src[0], "ft1", "Un titre général", "Résumé général.", "Le texte complet parle de zouglou.", db.ago(hours=1))).lastrowid
+            CONN.commit()
+        self.assertIn(aid, self.found("zouglou"))
+
     def test_search_stays_safe(self):
         self.assertEqual(call(server, "GET", "/api/search?q=" + urllib.parse.quote("%' OR 1=1--"))[0], 200)
         self.assertEqual(call(server, "GET", "/api/search?q=" + urllib.parse.quote("_ %"))[0], 200)
@@ -349,7 +380,7 @@ class Publishers(Case):
     def test_two_feeds_of_one_publisher_count_as_one_media(self):
         ids = {r["name"]: r["id"] for r in db.rows(CONN, "SELECT id, name FROM sources")}
         monde = [i for n, i in ids.items() if n.startswith("Le Monde")]
-        self.assertEqual(len(monde), 2)
+        self.assertGreaterEqual(len(monde), 2)
         title = "Mauritanie : un accord historique sur la gestion du fleuve Sénégal signé à Nouakchott"
         text = "Les pays riverains ont signé à Nouakchott un accord historique sur la gestion commune du fleuve Sénégal."
         a = add_article(monde[0], "pub1", title, text)
@@ -367,7 +398,7 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 16)
+        self.assertEqual(feeds, 33)
         self.assertEqual(st["real_sources"], 14)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
         self.assertEqual(ivoirians, 3)
@@ -569,6 +600,14 @@ class Engine(Case):
 
 
 class Feeds(unittest.TestCase):
+    def test_same_article_in_two_feeds_is_kept_once(self):
+        ids = [r["id"] for r in db.rows(CONN, "SELECT id FROM sources WHERE name LIKE 'Le Monde%' ORDER BY id LIMIT 2")]
+        item = {"guid": "x", "title": "Un article présent dans deux flux du même média", "summary": "Résumé.", "content": "", "url": "https://exemple.org/deux-flux",
+                "author": "", "published_at": db.now_str(), "image_url": None, "media_url": None, "media_kind": None, "duration": None}
+        for sid in ids:
+            rss.store(CONN, db.row(CONN, "SELECT * FROM sources WHERE id=?", (sid,)), [item], {})
+        self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM articles WHERE url='https://exemple.org/deux-flux'"), 1)
+
     def test_parse_rss_keeps_link_and_date_and_drops_bad_urls(self):
         xml = b"""<rss><channel><item><title>T</title><link>https://x.org/a</link><pubDate>Mon, 26 Oct 2026 10:00:00 GMT</pubDate>
         <description>D</description></item><item><title>B</title><link>javascript:alert(1)</link></item></channel></rss>"""

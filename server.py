@@ -3,6 +3,7 @@
 Lancement local :  python server.py   puis ouvrir http://127.0.0.1:8765
 Production      :  gunicorn wsgi:application (voir wsgi.py), avec PRISME_MODE=public
 """
+import difflib
 import email.utils
 import gzip
 import hashlib
@@ -415,16 +416,44 @@ def recall(req, q, user):
     return {"recall": editorial.recall_for(qv(q, "category"))}
 
 
-SYNONYMS = {"barca": ("barca", "barcelone", "barcelona")}
-SEARCH_COLUMNS = "norm(a.title || ' ' || COALESCE(a.summary, '') || ' ' || COALESCE(a.author, '') || ' ' || s.name || ' ' || COALESCE(c.name, ''))"
-SEARCH_STOP = {db.normalize(w) for w in nlp.STOPWORDS}
+# Surnoms et sigles courants. Les espaces imposent le mot entier : « ia » ne doit pas trouver « Binance ».
+SYNONYMS = {"barca": ("barca", "barcelone", "barcelona"), "foot": (" foot ", "football"), "ia": (" ia ", "intelligence artificielle"), "ci": (" ci ", "cote d ivoire"),
+            "usa": (" usa ", "etats unis"), "rdc": (" rdc ", "rd congo", "congo kinshasa"), "can": (" can ", "coupe d afrique"), "psg": (" psg ", "paris saint germain")}
+SEARCH_COLUMNS = "norm(a.title || ' ' || COALESCE(a.summary, '') || ' ' || COALESCE(a.content, '') || ' ' || COALESCE(a.author, '') || ' ' || s.name || ' ' || COALESCE(c.name, ''))"
+SEARCH_STOP = {db.normalize(w).strip() for w in nlp.STOPWORDS}
+_vocabulary = set()
+
+
+def _base_form(w):
+    """Réunit les formes d'un mot : ivoirienne et ivoirien, présidentielle et présidentiel, ministres et ministre."""
+    for suffix, keep in (("iennes", "ien"), ("ienne", "ien"), ("elles", "el"), ("elle", "el")):
+        if len(w) > 6 and w.endswith(suffix):
+            return w[:-len(suffix)] + keep
+    return w[:-1] if len(w) > 4 and w.endswith("s") else w
 
 
 def search_terms(text):
     """Les mots utiles de la recherche, sans les petits mots (« les », « du »), les accents ni le pluriel."""
-    words = re.findall(r"[a-z0-9]+", db.normalize(text))
+    words = db.normalize(text).split()
     useful = [w for w in words if w not in SEARCH_STOP and (len(w) > 1 or w.isdigit())] or words
-    return [w[:-1] if len(w) > 4 and w.endswith("s") else w for w in useful][:6]
+    return [_base_form(w) for w in useful][:6]
+
+
+def term_alternatives(t):
+    return SYNONYMS.get(t) or ((f" {t} ",) if len(t) <= 3 else (t,))
+
+
+def _correct(terms):
+    """Corrige une faute de frappe d'après les mots présents dans les articles (« abijan » devient « abidjan »)."""
+    if not _vocabulary:
+        for r in db.rows(CONN, "SELECT norm(title || ' ' || COALESCE(summary, '')) t FROM articles"):
+            _vocabulary.update(w for w in r["t"].split() if len(w) >= 4)
+    out = []
+    for t in terms:
+        known = t in SYNONYMS or len(t) <= 3 or any(w.startswith(t) for w in _vocabulary)
+        close = [] if known else difflib.get_close_matches(t, _vocabulary, 1, 0.8)
+        out.append(close[0] if close else t)
+    return out
 
 
 @route("GET", "/api/search")
@@ -438,7 +467,7 @@ def search(req, q, user):
     if qv(q, "source") and not str(qv(q, "source")).isdigit():
         raise ApiError(400, "Source invalide.")
     if qv(q, "author"):
-        where.append("norm(a.author) LIKE ?"); params.append(f"%{db.normalize(qv(q, 'author'))}%")
+        where.append("norm(a.author) LIKE ?"); params.append(f"%{db.normalize(qv(q, 'author')).strip()}%")
     if qv(q, "from"):
         where.append("date(a.published_at)>=date(?)"); params.append(qv(q, "from"))
     if qv(q, "to"):
@@ -451,27 +480,34 @@ def search(req, q, user):
     def run(terms, joiner):
         clauses, values = [], []
         for t in terms:
-            alts = SYNONYMS.get(t, (t,))
+            alts = term_alternatives(t)
             clauses.append("(" + " OR ".join(f"{SEARCH_COLUMNS} LIKE ?" for _ in alts) + ")")
             values += [f"%{x}%" for x in alts]
         extra = [f"({joiner.join(clauses)})"] if clauses else []
         return db.rows(CONN, base.format(where=" AND " + " AND ".join(where + extra)) + f" ORDER BY {order} LIMIT 600", params + values)
 
     terms = search_terms(qv(q, "q", ""))
-    items, relaxed = run(terms, " AND "), False
+    items, relaxed, corrected = run(terms, " AND "), False, None
+    if not items and terms:
+        fixed = _correct(terms)
+        if fixed != terms:
+            items = run(fixed, " AND ")
+            if items:
+                terms, corrected = fixed, " ".join(fixed)
     if not items and len(terms) > 1:      # aucun article ne contient tous les mots : on propose ceux qui en contiennent au moins un
         items, relaxed = run(terms, " OR "), True
     if terms and sort == "pertinence":    # les mots trouvés dans le titre passent d'abord, puis les plus récents
         def title_hits(a):
             title = db.normalize(a["title"])
-            return sum(any(x in title for x in SYNONYMS.get(t, (t,))) for t in terms)
+            return sum(any(x in title for x in term_alternatives(t)) for t in terms)
         items.sort(key=lambda a: (title_hits(a), a["published_at"] or ""), reverse=True)
     if qv(q, "dedup") == "1":             # une entrée par sujet : l'article qui répond le mieux, même s'il n'est pas à la une du sujet
         seen = set()
         items = [a for a in items if not a["cluster_id"] or not (a["cluster_id"] in seen or seen.add(a["cluster_id"]))]
     items = items[:200]
     now = db.now()
-    return {"total": len(items), "items": [engine.decorate(CONN, a, now) for a in items], "terms": terms, "relaxed": relaxed}
+    return {"total": len(items), "items": [engine.decorate(CONN, a, now) for a in items], "terms": terms, "relaxed": relaxed, "corrected": corrected,
+            "known_articles": db.scalar(CONN, "SELECT COUNT(*) FROM articles")}
 
 
 def _article(aid):
@@ -827,6 +863,7 @@ def _refresh_job():
     try:
         REFRESH["last"] = rss.refresh_all(CONN)
         _anon_cache.clear()
+        _vocabulary.clear()
         images.warm(CONN)
         _prewarm()
     except Exception:
@@ -1172,13 +1209,17 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
-    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v3'"):
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v4'"):
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        CONN.execute("UPDATE sources SET publisher=NULL WHERE is_demo=0")
         for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         db.fill_publishers(CONN)
-        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v3', '1')")
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v4', '1')")
+        CONN.commit()
+        engine.recluster(CONN)
+        engine.refresh_statuses(CONN)
     if PUBLIC:
         seed.ensure_admin(CONN, os.environ.get("PRISME_ADMIN_USER"), os.environ.get("PRISME_ADMIN_PASSWORD"))
     else:

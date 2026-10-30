@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_articles_cluster   ON articles(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_articles_source    ON articles(source_id);
+CREATE INDEX IF NOT EXISTS idx_articles_url       ON articles(url);
 CREATE INDEX IF NOT EXISTS idx_articles_category  ON articles(category_id);
 
 -- ---------------------------------------------------------------------
