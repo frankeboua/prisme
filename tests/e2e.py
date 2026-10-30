@@ -78,6 +78,8 @@ with sync_playwright() as p:
         link.click()
         page.wait_for_selector(".cmp-col")
         check("page de comparaison", "/sujet/" in page.url and page.locator(".cmp-col").count() >= 2)
+        sources = len(set(page.locator(".cmp-col b").first.evaluate_all("els => els.map(e => e.textContent)")))
+        check("le spectre compte chaque média une seule fois", f"{sources} média" in page.locator(".page-head .spectre").inner_text(), str(sources))
         page.screenshot(path=os.path.join(OUT, f"{MODE}_sujet.png"))
     else:
         check("page de comparaison (aucun sujet multi-sources)", False)

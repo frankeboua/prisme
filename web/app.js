@@ -129,6 +129,7 @@ const STATUS = {
   non_verifie: ["", "user", "Source unique"], conteste: ["b-warn", "alert", "Désaccord entre sources"], en_attente: ["", "clock", "En attente"],
 };
 const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture observée. Prisme ne certifie pas les faits : voir Notre méthode.">${ico(i)}${esc(label || l)}</span>`; };
+const mediaCount = (a) => new Set([a.source_name, ...(a.others || []).map((o) => o.source_name)]).size;
 const spectre = (n) => { n = Math.max(1, n || 1); return `<span class="spectre ${n === 1 ? "one" : ""}" title="${n} média${n > 1 ? "s" : ""} sur ce sujet"><span class="bars" aria-hidden="true">${"<i></i>".repeat(Math.min(n, 12))}</span>${n === 1 ? "1 média" : `${n} médias`}</span>`; };
 const freshBadge = (f) => {
   if (!f) return "";
@@ -187,7 +188,7 @@ const picture = (a, cls) => safeUrl(a.image_url)
   : esc(a.category_name || "Actualité");
 function card(a) {
   const others = a.others || [];
-  const names = [...new Set(others.map((o) => o.source_name))];
+  const names = [...new Set(others.map((o) => o.source_name))].filter((n) => n !== a.source_name);
   const why = a.why;
   return `<article class="card" data-id="${a.id}">
     <a class="card-img ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
@@ -198,7 +199,7 @@ function card(a) {
       ${a.correction_note ? `<div class="alert-line ok small">${ico("check")}<span>Correction publiée suite à un signalement.</span></div>` : ""}
       <p class="sum">${esc(a.summary)}</p>
       <div class="byline"><strong>${esc(a.source_name)}</strong>${relBadge(a.source_reliability, a.source_certified, a.is_demo)}<span title="${esc(fmtDate(a.published_at))}">${ago(a.published_at)}</span>${a.verification_status === "conteste" ? statusBadge(a.verification_status, a.verification_label) : ""}</div>
-      ${others.length ? `<button class="dup" data-act="compare" data-cluster="${a.cluster_id}">${spectre(names.length + 1)} <span>Comparer : ${esc(names.slice(0, 2).join(", "))}${names.length > 2 ? "…" : ""}</span></button>` : ""}
+      ${others.length ? `<button class="dup" data-act="compare" data-cluster="${a.cluster_id}">${spectre(mediaCount(a))} <span>${names.length ? `Comparer : ${esc(names.slice(0, 2).join(", "))}${names.length > 2 ? "…" : ""}` : `Comparer les ${others.length + 1} articles`}</span></button>` : ""}
       <div class="why" hidden></div>
     </div>
     <div class="card-foot">
@@ -259,17 +260,17 @@ async function pageFeed() {
 }
 const byline = (a) => `<div class="byline"><strong>${esc(a.source_name)}</strong><span title="${esc(fmtDate(a.published_at))}">${ago(a.published_at)}</span>${demoBadge(a)}</div>`;
 function leadStory(a) {
-  const n = new Set((a.others || []).map((o) => o.source_name)).size + 1;
+  const n = mediaCount(a);
   return `<article class="lead-story">
     <a class="frame ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a)}</a>
     <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
     <h2 style="font-size:clamp(1.9rem,3.8vw,3rem);margin:6px 0 10px;line-height:1.08"><a href="/article/${a.id}" style="text-decoration:none">${esc(a.title)}</a></h2>
     <p class="sum">${esc(a.summary)}</p>
-    <div class="row">${byline(a)}${n > 1 ? `<a href="/sujet/${a.cluster_id}" class="small" style="font-weight:600">${spectre(n)} Comparer</a>` : ""}</div>
+    <div class="row">${byline(a)}${a.others && a.others.length ? `<a href="/sujet/${a.cluster_id}" class="small" style="font-weight:600">${spectre(n)} Comparer</a>` : ""}</div>
   </article>`;
 }
 function sideStory(a) {
-  const n = new Set((a.others || []).map((o) => o.source_name)).size + 1;
+  const n = mediaCount(a);
   return `<article class="side-story"><div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
     <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>${byline(a)}${n > 1 ? `<div style="margin-top:6px"><a href="/sujet/${a.cluster_id}" style="text-decoration:none">${spectre(n)}</a></div>` : ""}</article>`;
 }
@@ -332,7 +333,7 @@ async function pageArticle(id) {
   if (a.path && location.pathname !== a.path) history.replaceState(null, "", a.path);
   const src = a.source || {};
   const f = a.freshness;
-  const nSources = new Set(a.others.map((o) => o.source_name)).size + 1;
+  const nSources = mediaCount(a);
   main().innerHTML = `
   <div class="cols article">
     <div>
