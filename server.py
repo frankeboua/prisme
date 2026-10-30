@@ -17,6 +17,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import webbrowser
 from collections import defaultdict, deque
 from datetime import timedelta
@@ -869,6 +871,19 @@ def healthz(req, q, user):
     return {"status": "ok", "articles": db.scalar(CONN, "SELECT COUNT(*) FROM articles"), "last_fetch": last, "collecting": REFRESH["running"]}
 
 
+@route("GET", "/api/admin/translate-check", "admin")
+def translate_check(req, q, user):
+    """Diagnostic : la réponse du service de traduction telle que le serveur la reçoit."""
+    url = "https://api.mymemory.translated.net/get?q=bonjour&langpair=fr|en"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Prisme"}), timeout=12) as r:
+            return {"status": r.status, "body": r.read(300).decode("utf-8", "replace")}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "body": e.read(300).decode("utf-8", "replace")}
+    except Exception as e:
+        return {"status": None, "body": f"{type(e).__name__}: {e}"[:300]}
+
+
 @route("GET", "/api/admin/changes", "admin")
 def admin_changes(req, q, user):
     return db.rows(CONN, "SELECT * FROM change_log ORDER BY id DESC LIMIT 50")
@@ -905,7 +920,7 @@ class Request:
 
 SECURITY_HEADERS = [
     ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; "
-                                "media-src 'self' https: http:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+                                "media-src 'self' https: http:; connect-src 'self' https://api.mymemory.translated.net; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
     ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"), ("Referrer-Policy", "strict-origin-when-cross-origin"),
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
 ]

@@ -305,6 +305,25 @@ class Translation(Case):
         self.assertEqual(set(seen), {"sw"})
         self.assertEqual(res["title"], "Kiswahili &amp; tafsiri")
 
+    def test_blocked_server_hands_text_to_browser(self):
+        original = translate._call
+
+        def blocked(*a):
+            raise OSError("403")
+        translate._call = blocked
+        try:
+            res = call(server, "GET", f"/api/articles/{A3}/translate?lang=it")[2]
+        finally:
+            translate._call = original
+        self.assertIn("error", res)
+        self.assertEqual(res["fallback"]["source"], "fr")
+        self.assertTrue(res["fallback"]["chunks"])
+        self.assertNotIn("403", res["error"])
+        self.assertIn("api.mymemory.translated.net", call(server, "GET", "/")[1]["content-security-policy"])
+
+    def test_diagnostic_is_admin_only(self):
+        self.assertEqual(call(server, "GET", "/api/admin/translate-check")[0], 401)
+
     def test_quota_message_is_understandable(self):
         original = translate._call
 

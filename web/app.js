@@ -415,6 +415,25 @@ async function pageArticle(id) {
   tool("summary");
 }
 
+async function translateInBrowser(failed, code) {
+  // Le serveur est refusé par le service : le navigateur du visiteur l'interroge directement, avec son propre quota.
+  const call = async (text) => {
+    const url = "https://api.mymemory.translated.net/get?" + new URLSearchParams({ q: text, langpair: `${failed.fallback.source}|${code}` });
+    const data = await (await fetch(url)).json();
+    const out = data.responseData && data.responseData.translatedText;
+    if (!out || /MYMEMORY WARNING/i.test(out)) throw new Error("quota");
+    return new DOMParser().parseFromString(out, "text/html").documentElement.textContent;
+  };
+  try {
+    const title = await call(failed.fallback.title);
+    const parts = [];
+    for (const c of failed.fallback.chunks) parts.push(await call(c));
+    return { title, body: parts.join(" "), engine: "MyMemory (traduction automatique)", cached: false };
+  } catch (e) {
+    return { error: e.message === "quota" ? "Le service de traduction gratuit a atteint sa limite du jour. Réessayez demain ou lisez l'article original." : failed.error };
+  }
+}
+
 async function tool(name) {
   const a = S.currentArticle;
   $$("#toolTabs [data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
@@ -442,7 +461,8 @@ async function tool(name) {
       const go = async () => {
         const code = $("#trLang").value;
         $("#trOut").innerHTML = `<div class="muted">Traduction en cours…</div>`;
-        const t = await get(`/api/articles/${a.id}/translate?lang=${code}`);
+        let t = await get(`/api/articles/${a.id}/translate?lang=${code}`);
+        if (t.error && t.fallback) t = await translateInBrowser(t, code);
         const dir = langs.rtl.includes(code) ? "rtl" : "ltr";
         $("#trOut").innerHTML = t.error ? `<div class="alert-line warn">${ico("alert")}<span>${esc(t.error)}</span></div>` :
           `<h3 lang="${code}" dir="${dir}">${esc(t.title)}</h3><p lang="${code}" dir="${dir}">${esc(t.body)}</p><div class="small muted">${ico("info")} Moteur : ${esc(t.engine)}${t.cached ? " (en cache)" : ""}. Traduction automatique${langs.uneven.includes(code) ? " de qualité variable pour cette langue" : ""} : en cas de doute, référez-vous au texte original.</div>`;
@@ -750,6 +770,8 @@ function pageMethod() {
       <p>Le logiciel compare les titres et les extraits (similarité statistique), sur quelques jours et dans une même langue. Il peut se tromper : réunir deux sujets voisins, ou manquer un même événement traité en français et en anglais.</p>
       <h2>Résumés automatiques</h2>
       <p>Les résumés sont produits par extraction : chaque phrase est copiée telle quelle depuis un article cité, avec son lien. Aucun texte n'est rédigé par un modèle de langage, aucune citation ni statistique n'est créée. Une phrase extraite reste à lire dans son contexte, sur le site d'origine.</p>
+      <h2>Traduction</h2>
+      <p>La traduction automatique passe par le service MyMemory. Le texte de l'article lui est envoyé, parfois directement depuis votre navigateur. Elle peut contenir des erreurs : le texte original fait foi.</p>
       <h2>Ce que Prisme conserve</h2>
       <p>Pour chaque article : le média d'origine, le lien, la date de publication déclarée et la date de collecte. Les corrections publiées et les changements de statut sont journalisés.</p>
       <h2>Rappels de la rédaction</h2>

@@ -2,6 +2,7 @@
 import html
 import json
 import re
+import traceback
 import urllib.parse
 import urllib.request
 
@@ -52,13 +53,17 @@ def translate_article(conn, art, dst):
     if src == dst:
         return {"title": art["title"], "body": nlp.strip_html(art["summary"]), "engine": "aucune (même langue)", "cached": False}
     body = nlp.strip_html(art.get("content") or art.get("summary") or "")[:2200]
+    chunks = _chunks(body)
+    # Si le serveur est refusé par le service, le navigateur du visiteur traduit lui-même ces textes.
+    fallback = {"source": src, "title": art["title"], "chunks": chunks}
     try:
         title = _call(art["title"], src, dst)
-        parts = [_call(c, src, dst) for c in _chunks(body)]
+        parts = [_call(c, src, dst) for c in chunks]
     except RuntimeError:
-        return {"error": "Le service de traduction gratuit a atteint sa limite du jour. Réessayez demain ou lisez l'article original."}
+        return {"error": "Le service de traduction gratuit a atteint sa limite du jour. Réessayez demain ou lisez l'article original.", "fallback": fallback}
     except Exception:
-        return {"error": "Le service de traduction ne répond pas pour le moment. Réessayez dans quelques minutes."}
+        traceback.print_exc()
+        return {"error": "Le service de traduction ne répond pas pour le moment. Réessayez dans quelques minutes.", "fallback": fallback}
     res = {"title": title, "body": re.sub(r"\s+", " ", " ".join(parts)), "engine": "MyMemory (traduction automatique)"}
     with db._lock:
         conn.execute("INSERT OR REPLACE INTO translations(article_id, lang, title, body, engine) VALUES (?,?,?,?,?)",
