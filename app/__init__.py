@@ -1,1 +1,1 @@
-"""Prisme — Agrégateur intelligent des nouveaux médias (ESATIC TWIN3, Groupe 7)."""
+"""Prisme : l'actualité comparée, média par média."""

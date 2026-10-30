@@ -69,7 +69,7 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 ## 3. Architecture
 
 ```
-Prisme_Groupe7/
+Prisme/
 ├── Lancer_Prisme.bat          Lanceur Windows (double-clic)
 ├── Reinitialiser_la_base.bat  Remise à zéro des données
 ├── server.py                  Cœur HTTP + API REST (40+ routes JSON)

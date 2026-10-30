@@ -954,7 +954,6 @@ def bootstrap():
 def main():
     print("=" * 62)
     print("  PRISME — L'actualité comparée, média par média")
-    print("  ESATIC TWIN3 — Groupe 7")
     print("=" * 62)
     bootstrap()
     if "--no-fetch" not in sys.argv:

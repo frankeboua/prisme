@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title PRISME - Agregateur intelligent des nouveaux medias (ESATIC TWIN3 - Groupe 7)
+title PRISME
 cd /d "%~dp0"
 where python >nul 2>nul
 if %errorlevel% neq 0 (
