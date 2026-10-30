@@ -1,11 +1,12 @@
 """Mode production : sécurité, SEO, absence de démonstration, regroupement. Lancer : python -m unittest tests.test_public"""
+import re
 import unittest
 
 from tests.helpers import call, setup
 
 setup("public")
 import server  # noqa: E402
-from app import db, engine, nlp, rss  # noqa: E402
+from app import db, engine, mail, nlp, rss  # noqa: E402
 
 server.bootstrap()
 CONN = server.CONN
@@ -34,7 +35,7 @@ def admin_token():
 
 
 def new_user(name):
-    return call(server, "POST", "/api/register", {"username": name, "email": f"{name}@exemple.org", "password": "motdepasse", "display_name": "L"})[2]["token"]
+    return call(server, "POST", "/api/register", {"email": f"{name}@exemple.org", "password": "motdepasse", "display_name": "L"})[2]["token"]
 
 
 class Case(unittest.TestCase):
@@ -50,6 +51,8 @@ class Production(Case):
         self.assertEqual(call(server, "POST", "/api/login", {"username": "admin", "password": "admin123"})[0], 401)
         self.assertEqual(call(server, "POST", "/api/demo-login", {"username": "redaction"})[0], 404)
         self.assertFalse(call(server, "GET", "/api/config")[2]["demo_logins"])
+        self.assertFalse(call(server, "GET", "/api/config")[2]["email_verification"])
+        self.assertEqual(call(server, "POST", "/api/email/code", {"email": "a@exemple.org", "purpose": "register"})[0], 503)
 
     def test_no_rating_of_real_media(self):
         rows = db.rows(CONN, "SELECT reliability, certified FROM sources")
@@ -69,12 +72,18 @@ class Auth(Case):
         self.assertIn(429, codes)
 
     def test_register_validation(self):
-        ok = {"username": "lecteur1", "email": "l@exemple.org", "password": "motdepasse", "display_name": "L"}
+        ok = {"email": "Lecteur1@Exemple.org", "password": "motdepasse", "display_name": "L"}
         self.assertEqual(call(server, "POST", "/api/register", {**ok, "email": "pasunmail"})[0], 400)
         self.assertEqual(call(server, "POST", "/api/register", {**ok, "password": "court"})[0], 400)
-        self.assertEqual(call(server, "POST", "/api/register", {**ok, "username": "x y"})[0], 400)
         self.assertEqual(call(server, "POST", "/api/register", ok)[0], 200)
         self.assertEqual(call(server, "POST", "/api/register", ok)[0], 409)
+        self.assertEqual(db.scalar(CONN, "SELECT username FROM users WHERE email='lecteur1@exemple.org'"), "lecteur1")
+        self.assertEqual(call(server, "POST", "/api/login", {"username": "LECTEUR1@exemple.org", "password": "motdepasse"})[0], 200)
+
+    def test_username_is_generated_without_collision(self):
+        new_user("doublon")
+        call(server, "POST", "/api/register", {"email": "doublon@autre.org", "password": "motdepasse", "display_name": "L"})
+        self.assertEqual(db.scalar(CONN, "SELECT username FROM users WHERE email='doublon@autre.org'"), "doublon2")
 
     def test_password_change_requires_current_and_revokes_sessions(self):
         t1 = new_user("lecteur2")
@@ -95,6 +104,71 @@ class Auth(Case):
         self.assertEqual(call(server, "POST", "/api/refresh", {}, t)[0], 403)
         self.assertEqual(call(server, "POST", f"/api/articles/{A1}/verify", {})[0], 401)
         self.assertEqual(call(server, "GET", "/api/favorites")[0], 401)
+
+
+class EmailVerification(Case):
+    """Service d'envoi simulé : aucun e-mail réel ne part pendant les tests."""
+
+    def setUp(self):
+        super().setUp()
+        self.sent = []
+        self._enabled, self._send = mail.enabled, mail.send
+        mail.enabled = lambda: True
+        mail.send = lambda to, subject, text: self.sent.append((to, subject, text))
+
+    def tearDown(self):
+        mail.enabled, mail.send = self._enabled, self._send
+
+    def code(self):
+        return re.search(r"\b(\d{6})\b", self.sent[-1][2]).group(1)
+
+    def test_register_requires_valid_code(self):
+        body = {"email": "verif@exemple.org", "password": "motdepasse", "display_name": "V"}
+        self.assertEqual(call(server, "POST", "/api/register", body)[0], 400)
+        st, _, res = call(server, "POST", "/api/email/code", {"email": body["email"], "purpose": "register"})
+        self.assertEqual(st, 200)
+        self.assertNotIn("demo_code", res)
+        self.assertEqual(call(server, "POST", "/api/register", {**body, "code": "000000" if self.code() != "000000" else "111111"})[0], 400)
+        self.assertEqual(call(server, "POST", "/api/register", {**body, "code": self.code()})[0], 200)
+        self.assertEqual(db.scalar(CONN, "SELECT email_verified FROM users WHERE email=?", (body["email"],)), 1)
+        self.assertEqual(call(server, "POST", "/api/register", {**body, "code": self.code()})[0], 409)
+
+    def test_code_stops_after_five_wrong_attempts(self):
+        body = {"email": "essais@exemple.org", "password": "motdepasse", "display_name": "E"}
+        call(server, "POST", "/api/email/code", {"email": body["email"], "purpose": "register"})
+        wrong = "000000" if self.code() != "000000" else "111111"
+        for _ in range(5):
+            call(server, "POST", "/api/register", {**body, "code": wrong})
+        self.assertEqual(call(server, "POST", "/api/register", {**body, "code": self.code()})[0], 400)
+
+    def test_password_is_never_emailed_and_reset_revokes_sessions(self):
+        mail.enabled = lambda: False
+        t = new_user("oubli")
+        mail.enabled = lambda: True
+        call(server, "POST", "/api/email/code", {"email": "oubli@exemple.org", "purpose": "reset"})
+        self.assertNotIn("motdepasse", self.sent[-1][2])
+        st, _, res = call(server, "POST", "/api/password/reset", {"email": "oubli@exemple.org", "code": self.code(), "new_password": "nouveaumdp"})
+        self.assertEqual(st, 200)
+        self.assertTrue(res["token"])
+        self.assertFalse(call(server, "GET", "/api/me", token=t)[2]["user"])
+        self.assertEqual(call(server, "POST", "/api/login", {"username": "oubli@exemple.org", "password": "nouveaumdp"})[0], 200)
+
+    def test_response_does_not_reveal_whether_account_exists(self):
+        a = call(server, "POST", "/api/email/code", {"email": "inconnu@exemple.org", "purpose": "reset"})
+        self.assertEqual((a[0], a[2]), (200, {"sent": True}))
+        self.assertEqual(self.sent, [])
+
+    def test_code_requests_are_limited_per_address(self):
+        codes = [call(server, "POST", "/api/email/code", {"email": "limite@exemple.org", "purpose": "register"})[0] for _ in range(5)]
+        self.assertIn(429, codes)
+
+    def test_send_failure_is_reported_cleanly(self):
+        def boom(*a):
+            raise OSError("refus du service")
+        mail.send = boom
+        st, _, res = call(server, "POST", "/api/email/code", {"email": "panne@exemple.org", "purpose": "register"})
+        self.assertEqual(st, 502)
+        self.assertNotIn("refus du service", str(res))
 
 
 class Inputs(Case):
@@ -138,6 +212,15 @@ class Inputs(Case):
             st, _, body = call(server, "GET", p)
             self.assertEqual(st, 404, p)
             self.assertNotIn('"""PRISME', str(body))
+
+
+class Video(Case):
+    def test_range_requests_for_mobile_players(self):
+        st, h, _ = call(server, "GET", "/app.css", headers={"range": "bytes=0-99"})
+        self.assertEqual(st, 206)
+        self.assertEqual(h["content-length"], "100")
+        self.assertTrue(h["content-range"].startswith("bytes 0-99/"))
+        self.assertEqual(call(server, "GET", "/app.css", headers={"range": "bytes=999999999-"})[0], 416)
 
 
 class Headers(Case):

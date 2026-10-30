@@ -55,6 +55,8 @@ def migrate(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(articles)")}
     if "status_reason" not in cols:
         conn.execute("ALTER TABLE articles ADD COLUMN status_reason TEXT")
+    if "email_verified" not in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
     if not conn.execute("SELECT 1 FROM meta WHERE key='neutral_sources'").fetchone():
         # Plus de note ni de badge « certifiée » attribués à de vrais médias.
         conn.execute("UPDATE sources SET reliability=70, certified=0, reliability_note=NULL WHERE is_demo=0")

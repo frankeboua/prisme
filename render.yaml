@@ -16,3 +16,7 @@ services:
         value: redaction
       - key: PRISME_ADMIN_PASSWORD
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: PRISME_MAIL_FROM
+        sync: false

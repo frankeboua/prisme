@@ -183,15 +183,16 @@ function applyPrefs() {
 // ====================================================================
 //  Composant : carte d'article
 // ====================================================================
-const picture = (a, cls) => safeUrl(a.image_url)
-  ? `<img src="${esc(safeUrl(a.image_url))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-  : esc(a.category_name || "Actualité");
+const illustration = (a) => `/illustrations/${esc(a.category_slug || "actualite")}-${(a.id || 0) % 3}.svg`;
+const picture = (a) => safeUrl(a.image_url)
+  ? `<img src="${esc(safeUrl(a.image_url))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback="${illustration(a)}">`
+  : `<img src="${illustration(a)}" alt="" loading="lazy"><span class="illu-tag">Illustration</span>`;
 function card(a) {
   const others = a.others || [];
   const names = [...new Set(others.map((o) => o.source_name))].filter((n) => n !== a.source_name);
   const why = a.why;
   return `<article class="card" data-id="${a.id}">
-    <a class="card-img ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
+    <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
     <div class="card-body">
       <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
       <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>
@@ -262,7 +263,7 @@ const byline = (a) => `<div class="byline"><strong>${esc(a.source_name)}</strong
 function leadStory(a) {
   const n = mediaCount(a);
   return `<article class="lead-story">
-    <a class="frame ${safeUrl(a.image_url) ? "" : "ph"}" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a)}</a>
+    <a class="frame" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a)}</a>
     <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
     <h2 style="font-size:clamp(1.9rem,3.8vw,3rem);margin:6px 0 10px;line-height:1.08"><a href="/article/${a.id}" style="text-decoration:none">${esc(a.title)}</a></h2>
     <p class="sum">${esc(a.summary)}</p>
@@ -347,7 +348,7 @@ async function pageArticle(id) {
       ${a.correction_note ? `<div class="alert-line ok" style="margin-bottom:12px">${ico("check")}<span><b>Correction :</b> ${esc(a.correction_note)}</span></div>` : ""}
       ${a.verification_status === "conteste" ? `<div class="alert-line bad" style="margin-bottom:12px">${ico("alert")}<span><b>${esc(a.verification_label)} :</b> d'autres médias rapportent une version différente. Consultez l'onglet « Recoupement ».</span></div>` : ""}
       ${a.media_type === "podcast" && a.media_url ? `<button class="btn primary" data-act="play" data-id="${a.id}" style="margin-bottom:14px">${ico("play")} Écouter le podcast</button>` : ""}
-      ${safeUrl(a.image_url) ? `<img class="hero-img" src="${esc(safeUrl(a.image_url))}" alt="" referrerpolicy="no-referrer">` : ""}
+      <div class="hero-frame">${picture(a)}</div>
       <div class="content" id="articleContent">${a.paragraphs.map((p) => `<p>${esc(p)}</p>`).join("")}</div>
       <div class="row no-print" style="margin:6px 0 22px">
         ${safeUrl(a.url) ? `<a class="btn primary" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} Lire l'article original sur ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
@@ -556,6 +557,11 @@ let mmTab = "podcast";
 async function pageMultimedia() {
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("headphones")} Espace multimédia</h1><p class="lead">Podcasts, vidéos et contenus issus des réseaux sociaux. Le lecteur audio continue de jouer pendant la navigation (mode arrière-plan).</p></div></div>
+    <section class="intro-video" aria-labelledby="introTitle">
+      <video id="introVideo" controls preload="none" poster="/video/prisme-30s.jpg" playsinline><source src="/video/prisme-30s.mp4" type="video/mp4"></video>
+      <div><span class="kicker">Vidéo de présentation</span><h2 id="introTitle">Prisme en 30 secondes</h2>
+        <p class="small muted">Une visite du site : la une, le spectre, la comparaison entre médias et notre méthode. Vidéo sans son, avec le texte à l'écran. Il s'agit d'une capture du site, pas d'un reportage.</p></div>
+    </section>
     <div class="tabs">${[["podcast", "headphones", "Podcasts"], ["video", "video", "Vidéos"], ["social", "social", "Réseaux sociaux"]].map(([k, i, l]) => `<button class="tab ${mmTab === k ? "active" : ""}" data-act="mmtab" data-tab="${k}">${ico(i)}${l}</button>`).join("")}</div>
     <div id="mmList">${skeleton(3)}</div>`;
   const r = await get(`/api/feed?mode=recent&media=${mmTab}&limit=60`);
@@ -773,14 +779,17 @@ function pageLogin() {
     <div class="auth-wrap">
       <div class="panel">
         <div class="tabs"><button class="tab active" data-act="authtab" data-t="login">Connexion</button><button class="tab" data-act="authtab" data-t="register">Créer un compte</button></div>
-        <form id="loginForm"><label class="f"><span>Identifiant ou e-mail</span><input class="input" name="username" required autocomplete="username"></label>
+        <form id="loginForm"><label class="f"><span>E-mail</span><input class="input" name="username" required autocomplete="username" inputmode="email"></label>
           <label class="f"><span>Mot de passe</span><input class="input" type="password" name="password" required autocomplete="current-password"></label>
-          <button class="btn primary" style="width:100%;justify-content:center">Se connecter</button></form>
+          <button class="btn primary" style="width:100%;justify-content:center">Se connecter</button>
+          ${S.config && S.config.email_verification ? `<p class="small" style="text-align:center;margin:10px 0 0"><button type="button" class="linklike" data-act="forgot">Mot de passe oublié ?</button></p>` : ""}</form>
         <form id="regForm" hidden><label class="f"><span>Nom complet</span><input class="input" name="display_name" required></label>
-          <div class="grid g2"><label class="f"><span>Identifiant</span><input class="input" name="username" required></label><label class="f"><span>E-mail</span><input class="input" type="email" name="email" required></label></div>
+          <label class="f"><span>E-mail</span><input class="input" type="email" name="email" required autocomplete="email"></label>
           <label class="f"><span>Mot de passe (8 caractères minimum)</span><input class="input" type="password" name="password" required minlength="8" autocomplete="new-password"></label>
           <div class="f"><span style="display:block;font-weight:600;font-size:.88rem;margin-bottom:6px">Vos centres d'intérêt</span><div class="chips">${S.cats.map((c) => `<label class="chip"><input type="checkbox" name="interests" value="${c.slug}" style="margin-right:4px">${esc(c.name)}</label>`).join("")}</div></div>
-          <button class="btn primary" style="width:100%;justify-content:center;margin-top:8px">Créer mon compte</button></form>
+          <div id="codeBox" hidden style="margin-top:10px"><div class="alert-line info small" id="codeInfo" style="margin-bottom:10px"></div>
+            <label class="f"><span>Code à 6 chiffres reçu par e-mail</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></div>
+          <button class="btn primary" id="regBtn" style="width:100%;justify-content:center;margin-top:8px">${S.config && S.config.email_verification ? "Recevoir mon code par e-mail" : "Créer mon compte"}</button></form>
         <p class="small muted" style="margin-bottom:0">Un compte permet de suivre des mots-clés, d'enregistrer des favoris et de personnaliser le fil. Lire Prisme n'en nécessite pas.</p>
       </div>
       ${S.config && S.config.demo_logins ? `<div class="panel">
@@ -794,8 +803,23 @@ function pageLogin() {
   $("#regForm").onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    try { const r = await post("/api/register", { ...Object.fromEntries(fd), interests: fd.getAll("interests") }); await onLogged(r); toast("Bienvenue sur Prisme !"); }
-    catch (err) { toast(err.message, 1); }
+    const btn = $("#regBtn");
+    btn.disabled = true;
+    try {
+      if (S.config && S.config.email_verification && $("#codeBox").hidden) {
+        const c = await post("/api/email/code", { email: fd.get("email"), purpose: "register" });
+        $("#codeInfo").textContent = c.demo_code
+          ? `Mode démonstration : aucun e-mail n'est envoyé. Votre code est ${c.demo_code}.`
+          : `Si cette adresse peut créer un compte, un code vient d'y être envoyé. Regardez aussi dans les indésirables. Il est valable 15 minutes.`;
+        $("#codeBox").hidden = false;
+        btn.textContent = "Créer mon compte";
+        e.target.code.focus();
+      } else {
+        const r = await post("/api/register", { ...Object.fromEntries(fd), interests: fd.getAll("interests") });
+        await onLogged(r); toast("Bienvenue sur Prisme !");
+      }
+    } catch (err) { toast(err.message, 1); }
+    btn.disabled = false;
   };
 }
 async function doLogin(body) {
@@ -881,6 +905,32 @@ async function openShare(id) {
     <div class="row">${ch.map(([k, l, u]) => `<a class="btn" href="${u}" target="_blank" rel="noopener" data-act="sharelog" data-id="${a.id}" data-ch="${k}">${l}</a>`).join("")}<button class="btn" data-act="copy" data-text="${esc(articleLink(a))}">${ico("copy")} Copier le lien</button></div>
     <hr class="sep"><h3>${ico("hash")} Publication prête à l'emploi (community management)</h3><div class="post-box" id="postBox">${esc(postText(a))}</div>
     <button class="btn primary" style="margin-top:10px" data-act="copy" data-text="${esc(postText(a))}">${ico("copy")} Copier la publication</button>`);
+}
+function openForgot() {
+  modal(`<div class="row between"><h2 style="margin:0">Mot de passe oublié</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+    <p class="small muted">Prisme n'envoie jamais de mot de passe. Vous recevez un code, puis vous en choisissez un nouveau.</p>
+    <form id="forgotForm"><label class="f"><span>E-mail</span><input class="input" type="email" name="email" required autocomplete="email"></label>
+      <div id="forgotStep" hidden><div class="alert-line info small" id="forgotInfo" style="margin-bottom:10px"></div>
+        <label class="f"><span>Code à 6 chiffres</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
+        <label class="f"><span>Nouveau mot de passe, 8 caractères minimum</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label></div>
+      <button class="btn primary" id="forgotBtn">Recevoir un code</button></form>`);
+  $("#forgotForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target));
+    try {
+      if ($("#forgotStep").hidden) {
+        const c = await post("/api/email/code", { email: data.email, purpose: "reset" });
+        $("#forgotInfo").textContent = c.demo_code ? `Mode démonstration : aucun e-mail n'est envoyé. Votre code est ${c.demo_code}.`
+          : "Si un compte existe avec cette adresse, un code vient d'y être envoyé. Il est valable 15 minutes.";
+        $("#forgotStep").hidden = false;
+        $("#forgotBtn").textContent = "Changer mon mot de passe";
+        e.target.code.focus();
+      } else {
+        const r = await post("/api/password/reset", data);
+        closeModal(); await onLogged(r); toast("Mot de passe changé.");
+      }
+    } catch (err) { toast(err.message, 1); }
+  };
 }
 function openReport(id) {
   if (!S.user) toast("Signalement anonyme : connectez-vous pour suivre son traitement.");
@@ -971,6 +1021,7 @@ document.addEventListener("click", async (e) => {
       case "sharelog": post(`/api/articles/${id}/share`, { channel: el.dataset.ch }).catch(() => {}); break;
       case "mmtab": mmTab = el.dataset.tab; pageMultimedia(); break;
       case "demo": { const r = await post("/api/demo-login", { username: el.dataset.u }); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); break; }
+      case "forgot": openForgot(); break;
       case "back": if (history.length > 1) history.back(); else nav("/"); break;
       case "print": window.print(); break;
       case "authtab": $$("[data-act=authtab]").forEach((t) => t.classList.toggle("active", t === el)); $("#loginForm").hidden = el.dataset.t !== "login"; $("#regForm").hidden = el.dataset.t === "login"; break;
@@ -1005,7 +1056,13 @@ document.addEventListener("change", async (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (!$("#modal").hidden) closeModal(); else closeDrawer(); } });
 document.addEventListener("error", (e) => {   // image distante indisponible : on garde une mise en page propre
-  if (e.target.tagName === "IMG") { const box = e.target.closest(".card-img,.frame"); if (box) { box.classList.add("ph"); } e.target.remove(); }
+  const img = e.target;
+  if (img.tagName !== "IMG") return;
+  if (img.dataset.fallback) {
+    img.src = img.dataset.fallback;
+    delete img.dataset.fallback;
+    img.insertAdjacentHTML("afterend", `<span class="illu-tag">Illustration</span>`);
+  } else img.remove();
 }, true);
 document.addEventListener("click", (e) => {   // liens internes sans rechargement de page
   const a = e.target.closest("a[href^='/']");

@@ -47,6 +47,13 @@ class Scenarios(unittest.TestCase):
         self.assertTrue(feed["profile"])
         self.assertEqual(call(server, "POST", "/api/demo-login", {"username": "inconnu"})[0], 404)
 
+    def test_register_with_code_displayed_on_screen(self):
+        res = call(server, "POST", "/api/email/code", {"email": "demo@exemple.org", "purpose": "register"})[2]
+        self.assertEqual(len(res["demo_code"]), 6)
+        body = {"email": "demo@exemple.org", "password": "motdepasse", "display_name": "D"}
+        self.assertEqual(call(server, "POST", "/api/register", body)[0], 400)
+        self.assertEqual(call(server, "POST", "/api/register", {**body, "code": res["demo_code"]})[0], 200)
+
     def test_demo_admin_can_moderate(self):
         tok = call(server, "POST", "/api/demo-login", {"username": "admin"})[2]["token"]
         self.assertEqual(call(server, "GET", "/api/admin/users", token=tok)[0], 200)

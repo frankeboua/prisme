@@ -29,7 +29,7 @@ Pour repartir de zéro : `Reinitialiser_la_base.bat`.
 
 La page *Connexion* propose une connexion en un clic : `admin`, `aminata`, `kevin`, `kouassi`, `yao`, `paul` et `sara`. Ces profils n'existent pas en production, où le compte administrateur est défini par des variables d'environnement.
 
-Tout visiteur peut aussi **créer son propre compte** ou naviguer **sans compte**.
+Tout visiteur peut aussi **créer son propre compte** avec son e-mail (aucun identifiant à inventer) ou naviguer **sans compte**. L'adresse est vérifiée par un code ; en démonstration locale, ce code s'affiche à l'écran.
 
 ### Tests
 
@@ -76,11 +76,13 @@ Prisme/
 ├── wsgi.py                    Entrée de production (gunicorn)
 ├── Dockerfile, railway.json, render.yaml   Déploiement
 ├── tests/                     Tests unitaires, d'intégration et navigateur
+├── tools/                     Génération des illustrations et de la vidéo
 ├── app/
 │   ├── db.py                  Accès aux données SQLite
 │   ├── nlp.py                 Traitement automatique du langage (TAL)
 │   ├── engine.py              Doublons, recoupement, résumé, comparaison, recommandation
 │   ├── pages.py               Pages rendues côté serveur, sitemap, robots.txt
+│   ├── mail.py                Envoi des codes de vérification (Brevo)
 │   ├── rss.py                 Collecteur RSS 2.0 / Atom (parallélisé)
 │   ├── translate.py           Traduction automatique avec cache
 │   └── seed.py                Données initiales et comptes de démonstration

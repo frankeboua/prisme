@@ -23,7 +23,18 @@ CREATE TABLE IF NOT EXISTS users (
     simple_mode      INTEGER NOT NULL DEFAULT 0, -- grands boutons, navigation simplifiée
     preferred_lang   TEXT    NOT NULL DEFAULT 'fr',
     diversity_ratio  REAL    NOT NULL DEFAULT 0.25, -- part du fil réservée à la découverte
+    email_verified   INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Codes à usage unique envoyés par e-mail (seule leur empreinte est conservée)
+CREATE TABLE IF NOT EXISTS email_codes (
+    email       TEXT NOT NULL,
+    purpose     TEXT NOT NULL CHECK (purpose IN ('register','reset')),
+    code_hash   TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (email, purpose)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

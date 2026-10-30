@@ -6,6 +6,7 @@ Production      :  gunicorn wsgi:application (voir wsgi.py), avec PRISME_MODE=pu
 import email.utils
 import gzip
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -22,7 +23,7 @@ from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from app import db, engine, nlp, pages, rss, seed, translate
+from app import db, engine, mail, nlp, pages, rss, seed, translate
 
 PORT = int(os.environ.get("PORT") or os.environ.get("PRISME_PORT") or "8765")
 PUBLIC = os.environ.get("PRISME_MODE") == "public"     # production : ni contenu ni compte de démonstration
@@ -88,29 +89,99 @@ def http_url(value):
 
 def public_user(u):
     return {k: u[k] for k in ("id", "username", "email", "display_name", "role", "persona", "font_scale", "high_contrast",
-                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "created_at")} if u else None
+                              "theme", "simple_mode", "preferred_lang", "diversity_ratio", "email_verified", "created_at")} if u else None
 
 
 # =====================================================================
 #  Authentification
 # =====================================================================
+def verification_on():
+    """En démonstration locale le code s'affiche à l'écran ; en production il faut un service d'envoi."""
+    return mail.enabled() or not PUBLIC
+
+
+def clean_email(value):
+    email = str(value or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise ApiError(400, "Adresse e-mail invalide.")
+    return email
+
+
+def _code_hash(email, purpose, code):
+    return hashlib.sha256(f"{email}|{purpose}|{code}".encode()).hexdigest()
+
+
+def _check_code(email, purpose, code):
+    """Un code est valable 15 minutes, pour 5 essais au plus, et ne sert qu'une fois."""
+    row = db.row(CONN, "SELECT * FROM email_codes WHERE email=? AND purpose=?", (email, purpose))
+    bad = ApiError(400, "Code incorrect ou expiré. Demandez-en un nouveau.")
+    if not row or row["expires_at"] < db.now_str() or row["attempts"] >= 5:
+        raise bad
+    if not hmac.compare_digest(row["code_hash"], _code_hash(email, purpose, str(code or "").strip())):
+        CONN.execute("UPDATE email_codes SET attempts=attempts+1 WHERE email=? AND purpose=?", (email, purpose))
+        CONN.commit()
+        raise bad
+    CONN.execute("DELETE FROM email_codes WHERE email=? AND purpose=?", (email, purpose))
+
+
+@route("POST", "/api/email/code")
+def email_code(req, body, user):
+    """Envoie un code à l'adresse. La réponse est la même que le compte existe ou non."""
+    if not verification_on():
+        raise ApiError(503, "La vérification par e-mail n'est pas encore activée.")
+    email, purpose = clean_email(body.get("email")), body.get("purpose")
+    if purpose not in ("register", "reset"):
+        raise ApiError(400, "Demande invalide.")
+    limit("code-ip", req.ip, 20, 600)
+    limit("code-email", email, 3, 600)
+    exists = db.scalar(CONN, "SELECT 1 FROM users WHERE email=?", (email,))
+    if bool(exists) != (purpose == "reset"):
+        return {"sent": True}
+    code = f"{secrets.randbelow(1000000):06d}"
+    with db._lock:
+        CONN.execute("INSERT OR REPLACE INTO email_codes(email, purpose, code_hash, expires_at) VALUES (?,?,?,?)",
+                     (email, purpose, _code_hash(email, purpose, code), db.to_str(db.now() + timedelta(minutes=15))))
+        CONN.commit()
+    if not mail.enabled():
+        return {"sent": True, "demo_code": code}
+    action = "créer votre compte" if purpose == "register" else "choisir un nouveau mot de passe"
+    try:
+        mail.send(email, f"Votre code Prisme : {code}", f"Bonjour,\n\nVotre code pour {action} sur Prisme est : {code}\n\n"
+                  "Il est valable 15 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.\n")
+    except Exception:
+        traceback.print_exc()
+        raise ApiError(502, "L'e-mail n'a pas pu être envoyé. Réessayez dans quelques minutes.")
+    return {"sent": True}
+
+
+def _new_username(email):
+    """L'identifiant interne est déduit de l'e-mail : le visiteur n'a rien à inventer."""
+    base = re.sub(r"[^a-z0-9_.-]", "", email.split("@")[0])[:24]
+    base = base if len(base) >= 3 else f"lecteur{base}"
+    name, n = base, 1
+    while db.scalar(CONN, "SELECT 1 FROM users WHERE username=?", (name,)):
+        n += 1
+        name = f"{base}{n}"
+    return name
+
+
 @route("POST", "/api/register")
 @db.write
 def register(req, body, user):
     limit("register", req.ip, 30, 600)
-    need(body, "username", "email", "password", "display_name")
+    need(body, "email", "password", "display_name")
+    email = clean_email(body["email"])
     if len(str(body["password"])) < 8:
         raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
-    if not EMAIL_RE.match(str(body["email"])):
-        raise ApiError(400, "Adresse e-mail invalide.")
-    body["display_name"] = str(body["display_name"]).strip()[:80]
-    if not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", str(body["username"])):
-        raise ApiError(400, "Identifiant invalide (3 à 30 caractères : lettres, chiffres, . _ -).")
-    if db.row(CONN, "SELECT id FROM users WHERE username=? OR email=?", (body["username"], body["email"])):
-        raise ApiError(409, "Cet identifiant ou cet e-mail est déjà utilisé.")
+    display_name = str(body["display_name"]).strip()[:80]
+    if db.row(CONN, "SELECT id FROM users WHERE email=?", (email,)):
+        raise ApiError(409, "Un compte existe déjà avec cet e-mail. Connectez-vous ou utilisez « Mot de passe oublié ».")
+    checked = verification_on()
+    if checked:
+        _check_code(email, "register", body.get("code"))
     h, salt = seed.hash_password(body["password"])
-    uid = CONN.execute("INSERT INTO users(username, email, display_name, password_hash, salt) VALUES (?,?,?,?,?)",
-                       (body["username"], body["email"], body["display_name"], h, salt)).lastrowid
+    uid = CONN.execute("INSERT INTO users(username, email, display_name, password_hash, salt, email_verified) VALUES (?,?,?,?,?,?)",
+                       (_new_username(email), email, display_name, h, salt, int(checked))).lastrowid
     cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT * FROM categories")}
     for slug in body.get("interests") or []:
         if slug in cats:
@@ -119,6 +190,27 @@ def register(req, body, user):
                  (uid, "Bienvenue sur Prisme ! Ajoutez des alertes par mots-clés pour être notifié(e)."))
     CONN.commit()
     return _open_session(uid)
+
+
+@route("POST", "/api/password/reset")
+@db.write
+def password_reset(req, body, user):
+    """Aucun mot de passe n'est jamais envoyé : le lecteur prouve qu'il reçoit ses e-mails, puis en choisit un nouveau."""
+    if not verification_on():
+        raise ApiError(503, "La vérification par e-mail n'est pas encore activée.")
+    limit("reset", req.ip, 20, 600)
+    email = clean_email(body.get("email"))
+    if len(str(body.get("new_password", ""))) < 8:
+        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    u = db.row(CONN, "SELECT id FROM users WHERE email=?", (email,))
+    if not u:
+        raise ApiError(400, "Code incorrect ou expiré. Demandez-en un nouveau.")
+    _check_code(email, "reset", body.get("code"))
+    h, salt = seed.hash_password(body["new_password"])
+    CONN.execute("UPDATE users SET password_hash=?, salt=?, email_verified=1 WHERE id=?", (h, salt, u["id"]))
+    CONN.execute("DELETE FROM sessions WHERE user_id=?", (u["id"],))
+    CONN.commit()
+    return _open_session(u["id"])
 
 
 def _open_session(uid):
@@ -136,7 +228,7 @@ def login(req, body, user):
     name = str(body["username"])[:200]
     limit("login", req.ip, 30, 60)
     limit("login-user", name.lower(), 10, 60)
-    u = db.row(CONN, "SELECT * FROM users WHERE username=? OR email=?", (name, name))
+    u = db.row(CONN, "SELECT * FROM users WHERE username=? OR email=?", (name, name.strip().lower()))
     if not u or not seed.check_password(body["password"], u["password_hash"], u["salt"]):
         raise ApiError(401, "Identifiant ou mot de passe incorrect.")
     return _open_session(u["id"])
@@ -156,7 +248,7 @@ def demo_login(req, body, user):
 
 @route("GET", "/api/config")
 def config(req, q, user):
-    return {"demo_logins": not PUBLIC, "refresh_minutes": REFRESH_MINUTES if PUBLIC else None}
+    return {"demo_logins": not PUBLIC, "refresh_minutes": REFRESH_MINUTES if PUBLIC else None, "email_verification": verification_on()}
 
 
 @route("POST", "/api/logout", "user")
@@ -193,10 +285,11 @@ def update_me(req, body, user):
                 continue
             sets.append(f"{k}=?"); vals.append(v)
     if "email" in body:
-        if not EMAIL_RE.match(str(body["email"])):
-            raise ApiError(400, "Adresse e-mail invalide.")
+        body["email"] = clean_email(body["email"])
         if db.row(CONN, "SELECT id FROM users WHERE email=? AND id<>?", (body["email"], user["id"])):
             raise ApiError(409, "Cette adresse e-mail est déjà utilisée.")
+        if body["email"] != user["email"]:
+            sets.append("email_verified=0")   # la nouvelle adresse n'a pas été vérifiée
     changed_password = False
     if body.get("new_password"):
         if len(str(body["new_password"])) < 8:
@@ -839,8 +932,17 @@ def _static(path, headers):
     cache = "public, max-age=31536000, immutable" if "/fonts/" in path else "public, max-age=0, must-revalidate"
     if headers.get("if-none-match") == etag:
         return 304, b"", ctype, [("ETag", etag), ("Cache-Control", cache)]
+    extra = [("ETag", etag), ("Cache-Control", cache), ("Accept-Ranges", "bytes")]
+    m = re.fullmatch(r"bytes=(\d+)-(\d*)", headers.get("range", ""))
+    if m:   # les lecteurs vidéo des téléphones lisent le fichier par morceaux
+        start, end = int(m.group(1)), min(int(m.group(2) or st.st_size - 1), st.st_size - 1)
+        if start > end:
+            return 416, b"", ctype, [("Content-Range", f"bytes */{st.st_size}")]
+        with open(full, "rb") as f:
+            f.seek(start)
+            return 206, f.read(end - start + 1), ctype, extra + [("Content-Range", f"bytes {start}-{end}/{st.st_size}")]
     with open(full, "rb") as f:
-        return 200, f.read(), ctype, [("ETag", etag), ("Cache-Control", cache)]
+        return 200, f.read(), ctype, extra
 
 
 def handle(method, raw_path, headers, read_body, ip):
@@ -878,7 +980,7 @@ def handle(method, raw_path, headers, read_body, ip):
     finally:
         CONN.release()
     out = [("Content-Type", ctype), *extra, *SECURITY_HEADERS]
-    if len(body) > 1024 and ctype.startswith(TEXT_TYPES) and "gzip" in headers.get("accept-encoding", ""):
+    if status == 200 and len(body) > 1024 and ctype.startswith(TEXT_TYPES) and "gzip" in headers.get("accept-encoding", ""):
         body = gzip.compress(body, 5)
         out += [("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
     out.append(("Content-Length", str(len(body))))

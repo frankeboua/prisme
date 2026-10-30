@@ -35,6 +35,7 @@ Avant une présentation, ouvrir le site 2 à 3 minutes à l'avance. Pour conserv
 | `PRISME_REFRESH_MINUTES` | Intervalle de collecte des flux (30 par défaut) |
 | `PRISME_SITE_URL` | Adresse publique, utile avec un domaine personnalisé (les adresses Railway et Render sont détectées seules) |
 | `RAILWAY_RUN_UID=0` | Sur Railway : permet d'écrire sur le volume |
+| `BREVO_API_KEY`, `PRISME_MAIL_FROM` | Envoi des codes de vérification (section 5) |
 
 ## 3. Pour migrer vers Railway plus tard
 
@@ -55,14 +56,30 @@ Identifiant : `redaction`. Le mot de passe se change dans Render : service *pris
 
 Pour recréer le service : *New > Blueprint*, choisir le dépôt (le fichier `render.yaml` est lu automatiquement) et renseigner `PRISME_ADMIN_PASSWORD`.
 
-## 5. Fonctionnement en production
+## 5. Activer la vérification des e-mails
+
+Sans service d'envoi, le site public crée les comptes **sans vérifier l'adresse**. L'offre gratuite de Render bloque l'envoi d'e-mails classique (ports 25, 465 et 587) : Prisme passe donc par l'API HTTPS de Brevo.
+
+1. Créer un compte sur [brevo.com](https://www.brevo.com) et y valider l'adresse d'expéditeur.
+2. Créer une clé API dans Brevo (*SMTP & API > API Keys*).
+3. Dans Render, service *prisme* > *Environment*, ajouter `BREVO_API_KEY` et `PRISME_MAIL_FROM` (l'adresse validée), puis enregistrer.
+
+Le site redémarre et la vérification s'active seule. Ce qui se passe ensuite :
+
+- **Inscription :** nom, e-mail et mot de passe, puis un code à 6 chiffres reçu par e-mail. Le compte n'est créé qu'avec ce code.
+- **Mot de passe oublié :** Prisme n'envoie jamais de mot de passe. Il envoie un code, puis le lecteur en choisit un nouveau ; ses autres sessions sont fermées.
+- **Protections :** un code vaut 15 minutes et 5 essais, sert une seule fois et n'est conservé que sous forme d'empreinte. Trois demandes au plus par adresse en 10 minutes. La réponse ne révèle pas si un compte existe.
+
+Un expéditeur en `@gmail.com` peut arriver dans les indésirables : un domaine à vous améliore la livraison. En démonstration locale, aucun e-mail ne part et le code s'affiche à l'écran.
+
+## 6. Fonctionnement en production
 
 - **Serveur :** gunicorn, 1 processus et 8 fils. Ne pas augmenter le nombre de processus : la collecte programmée et la limitation de débit vivent en mémoire.
 - **Sauvegarde :** aucune sur l'offre gratuite, la base y est temporaire.
 - **Journaux :** visibles dans le tableau de bord Render, onglet *Logs*. Les erreurs détaillées n'y figurent que côté serveur, jamais dans les réponses.
 - **HTTPS :** fourni par la plateforme ; l'en-tête HSTS est envoyé par l'application.
 
-## 6. Google Search Console
+## 7. Google Search Console
 
 Un site déployé n'est pas pour autant référencé. L'indexation prend de quelques jours à plusieurs semaines et n'est pas garantie. Une adresse `*.onrender.com` fonctionne, mais un domaine à vous est préférable.
 
@@ -83,6 +100,6 @@ Un site déployé n'est pas pour autant référencé. L'indexation prend de quel
 
 Non installé. Il exigerait une bannière de consentement et un assouplissement de la politique de sécurité (CSP). Les données de la Search Console suffisent pour commencer.
 
-## 7. Conditions d'utilisation des flux
+## 8. Conditions d'utilisation des flux
 
 À vérifier avant une exploitation durable ou commerciale : les conditions de réutilisation des flux RSS de chaque média. Prisme affiche titres et extraits et renvoie vers l'original, mais cela ne remplace pas une lecture de ces conditions, ni un avis juridique.

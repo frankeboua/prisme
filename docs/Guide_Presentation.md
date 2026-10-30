@@ -71,6 +71,9 @@ Scénario de démonstration conçu pour la soutenance du Groupe 7 (ESATIC, L3 TW
 
 ### Questions probables du jury
 
+- **Comment l'e-mail est-il vérifié ?** Un code à 6 chiffres est envoyé à l'adresse : le compte n'est créé qu'avec ce code. Il vaut 15 minutes et 5 essais. Prisme n'envoie jamais de mot de passe : en cas d'oubli, le lecteur reçoit un code et en choisit un nouveau. Sur le site public, l'envoi réel doit encore être activé avec un service d'e-mails ; en démo locale, le code s'affiche à l'écran.
+- **D'où viennent les images sans photo ?** Ce sont des illustrations abstraites par rubrique, marquées « Illustration ». Elles ne prétendent pas montrer l'événement : une image réaliste inventée tromperait le lecteur.
+
 - **Pourquoi pas un grand modèle de langage ?** Choix d'une IA *explicable*, gratuite et hors-ligne : chaque décision (doublon, statut, recommandation) peut être justifiée ; un LLM est prévu en « plus tard » pour les synthèses complexes.
 - **Comment éviter la bulle de filtres ?** Quota de découverte réglable + indice de diversité visible + critères affichés.
 - **Fiabilité des sources ?** Prisme ne note pas les vrais médias : une note subjective publique serait contestable. Il montre des faits : pays, type de média, nombre de médias sur le sujet, écarts de chiffres.
