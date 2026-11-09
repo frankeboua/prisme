@@ -1,5 +1,6 @@
 """Mode production : sécurité, SEO, absence de démonstration, regroupement. Lancer : python -m unittest tests.test_public"""
 import io
+import os
 import re
 import unittest
 import urllib.parse
@@ -398,10 +399,10 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 33)
-        self.assertEqual(st["real_sources"], 14)
+        self.assertEqual(feeds, 39)
+        self.assertEqual(st["real_sources"], 20)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 3)
+        self.assertEqual(ivoirians, 9)
 
 
 class Video(Case):
@@ -619,6 +620,126 @@ class Feeds(unittest.TestCase):
     def test_firm_numbers(self):
         self.assertEqual(nlp.firm_numbers("au moins 60 morts"), [])
         self.assertEqual(nlp.firm_numbers("68 morts"), [(68.0, "mort")])
+
+    def test_parse_feed_tolerates_blank_before_xml_declaration(self):
+        xml = b"\n  <?xml version=\"1.0\"?><rss><channel><item><title>T</title><link>https://x.org/b</link></item></channel></rss>"
+        self.assertEqual(rss.parse_feed(xml)[0]["url"], "https://x.org/b")
+
+
+class VerificationQuatreEtapes(unittest.TestCase):
+    """Recommandations de l'enseignant : vérifier la source, sa crédibilité, croiser trois sources fiables, authentifier."""
+
+    def setUp(self):
+        server._hits.clear()
+        engine.reset_credibility()
+
+    def test_ivorian_media_are_followed(self):
+        names = {r["name"] for r in db.rows(CONN, "SELECT name FROM sources WHERE country=\"Côte d'Ivoire\" AND is_demo=0")}
+        for n in ("AIP (Agence ivoirienne de presse)", "RTI Info", "Linfodrome", "L'Intelligent d'Abidjan", "Le Banco.net", "Yeclo", "Ivoire Matin"):
+            self.assertIn(n, names)
+
+    def test_four_steps_in_teacher_order(self):
+        st, _, res = call(server, "GET", f"/api/articles/{A1}/check")
+        self.assertEqual(st, 200)
+        self.assertEqual([s["key"] for s in res["steps"]], ["source", "credibilite", "recoupement", "authentification"])
+        self.assertEqual(res["total"], 4)
+        self.assertEqual(res["passed"], sum(1 for s in res["steps"] if s["ok"]))
+        self.assertEqual(len(res["steps"][1]["criteria"]), 6)
+        self.assertTrue(all(t["url"].startswith("https://") for t in res["steps"][3]["tools"]))
+        self.assertIsNone(res["factchecks"])     # sans clé d'API, seulement des liens
+
+    def test_cross_check_counts_three_reliable_media(self):
+        cred = engine.source_credibility(CONN)
+        pubs = {db.scalar(CONN, "SELECT COALESCE(s.publisher, s.name) FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.id=?", (i,)) for i in (A1, A2, A3)}
+        self.assertTrue(all(cred[p]["reliable"] == (cred[p]["met"] >= engine.RELIABLE_MIN) for p in pubs))
+        step = call(server, "GET", f"/api/articles/{A1}/check")[2]["steps"][2]
+        self.assertEqual(step["count"], sum(1 for p in pubs if cred[p]["reliable"]))
+        self.assertEqual(step["ok"], step["count"] >= 3)
+        art = call(server, "GET", f"/api/articles/{A1}")[2]
+        if step["ok"]:
+            self.assertEqual(art["verification_label"], f"Recoupé par {step['count']} sources fiables")
+        self.assertEqual(engine.status_label("verifie", 3, None, 2), "Repris par 3 sources")
+        self.assertEqual(engine.status_label("verifie", 3, None, 3), "Recoupé par 3 sources fiables")
+
+    def test_credibility_is_measured_not_a_grade(self):
+        items = call(server, "GET", "/api/sources")[2]
+        c = next(i["credibility"] for i in items if i["credibility"])
+        self.assertEqual(c["total"], 6)
+        self.assertTrue(all(k["detail"] for k in c["criteria"]))
+        self.assertTrue(all(r["reliability"] == 70 for r in db.rows(CONN, "SELECT reliability FROM sources WHERE is_demo=0")))
+
+    def test_recirculating_info_fails_authentication(self):
+        old = add_article(src[3], "g-old", "Pêche artisanale : ancien bilan publié il y a longtemps", TEXT, hours=24 * 400)
+        res = call(server, "GET", f"/api/articles/{old}/check")[2]
+        self.assertEqual(res["steps"][3]["key"], "authentification")
+        self.assertIn("checks", res["steps"][3])
+
+
+class FirebaseEtSearchConsole(unittest.TestCase):
+    def setUp(self):
+        server._hits.clear()
+        self.saved = dict(server.FIREBASE), server.firebase_lookup
+
+    def tearDown(self):
+        server.FIREBASE.update(self.saved[0])
+        server.firebase_lookup = self.saved[1]
+        server._anon_cache.clear()
+
+    def enable(self, info):
+        server.FIREBASE.update(apiKey="cle-publique", authDomain="prisme-test.firebaseapp.com", projectId="prisme-test")
+        server.firebase_lookup = lambda token: info
+
+    def test_disabled_without_configuration(self):
+        server._anon_cache.clear()
+        self.assertIsNone(call(server, "GET", "/api/config")[2]["firebase"])
+        self.assertEqual(call(server, "POST", "/api/auth/firebase", {"id_token": "x" * 40})[0], 503)
+        csp = call(server, "GET", "/api/config")[1]["content-security-policy"]
+        self.assertNotIn("gstatic", csp)
+
+    def test_verified_email_opens_a_session_and_reuses_the_account(self):
+        self.enable({"email": "Lectrice@Exemple.org", "emailVerified": True, "displayName": "Lectrice"})
+        st, _, res = call(server, "POST", "/api/auth/firebase", {"id_token": "x" * 40, "country": "Côte d'Ivoire"})
+        self.assertEqual(st, 200)
+        self.assertEqual(res["user"]["email"], "lectrice@exemple.org")
+        self.assertEqual(res["user"]["email_verified"], 1)
+        again = call(server, "POST", "/api/auth/firebase", {"id_token": "y" * 40})[2]
+        self.assertEqual(again["user"]["id"], res["user"]["id"])
+        server._anon_cache.clear()
+        self.assertEqual(call(server, "GET", "/api/config")[2]["firebase"]["projectId"], "prisme-test")
+
+    def test_unverified_email_is_refused(self):
+        self.enable({"email": "pasconfirme@exemple.org", "emailVerified": False})
+        self.assertEqual(call(server, "POST", "/api/auth/firebase", {"id_token": "x" * 40})[0], 403)
+        self.assertEqual(call(server, "POST", "/api/auth/firebase", {"id_token": "court"})[0], 400)
+
+    def test_no_unverified_local_signup_when_firebase_is_on(self):
+        self.enable({"email": "z@exemple.org", "emailVerified": True})
+        body = {"email": "local@exemple.org", "password": "motdepasse", "display_name": "L", "country": "Sénégal"}
+        self.assertEqual(call(server, "POST", "/api/register", body)[0], 400)
+
+    def test_google_site_verification_tag(self):
+        os.environ["PRISME_GOOGLE_SITE_VERIFICATION"] = "jeton-de-test"
+        try:
+            html = call(server, "GET", "/")[2]
+        finally:
+            del os.environ["PRISME_GOOGLE_SITE_VERIFICATION"]
+        self.assertIn('<meta name="google-site-verification" content="jeton-de-test">', html)
+        self.assertNotIn("google-site-verification", call(server, "GET", "/methode")[2])
+
+
+class TestsUtilisateurs(unittest.TestCase):
+    def setUp(self):
+        server._hits.clear()
+
+    def test_sus_score_and_admin_summary(self):
+        self.assertEqual(call(server, "POST", "/api/feedback", {"answers": [5, 1] * 5, "comment": "Clair"})[2]["sus"], 100)
+        self.assertEqual(call(server, "POST", "/api/feedback", {"answers": [1, 5] * 5})[2]["sus"], 0)
+        self.assertEqual(call(server, "POST", "/api/feedback", {"answers": [3] * 9})[0], 400)
+        self.assertEqual(call(server, "POST", "/api/feedback", {"answers": [6] * 10})[0], 400)
+        self.assertIn(call(server, "GET", "/api/feedback")[0], (401, 403))
+        res = call(server, "GET", "/api/feedback", token=admin_token())[2]
+        self.assertGreaterEqual(res["count"], 2)
+        self.assertEqual(res["target"], 85)
 
 
 if __name__ == "__main__":

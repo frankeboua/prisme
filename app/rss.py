@@ -61,7 +61,7 @@ def safe_url(url):
 def parse_feed(xml_bytes):
     if b"<!ENTITY" in xml_bytes[:4096]:
         raise ValueError("flux refusé : déclaration d'entités XML")
-    root = ET.fromstring(xml_bytes)
+    root = ET.fromstring(xml_bytes.lstrip(b"\xef\xbb\xbf \t\r\n"))   # certains sites placent des blancs avant la déclaration XML
     items = []
     for it in root.iter("item"):
         enc = it.find("enclosure")
@@ -117,7 +117,7 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_SafeRedirect)
 
 
-def fetch(url, timeout=15, max_bytes=MAX_FEED_BYTES):
+def fetch(url, timeout=25, max_bytes=MAX_FEED_BYTES):   # certains sites ivoiriens (AIP) répondent en plus de 10 s
     assert_public_host(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/rss+xml, application/xml, */*"})
     with _opener.open(req, timeout=timeout) as r:

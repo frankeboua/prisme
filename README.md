@@ -45,7 +45,8 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 
 | Priorité | Fonctionnalité | Où la trouver |
 |---|---|---|
-| Indispensable | Agrégation RSS (16 flux réels de 14 médias, dont 3 ivoiriens : France 24, RFI, BBC Afrique, Le Monde, Jeune Afrique, Franceinfo, BBC, Al Jazeera, 01net, Numerama, podcast Radio France…) | Fil d'actualité, bouton ⟳ |
+| Indispensable | Agrégation RSS (39 flux de 20 médias réels, dont 9 ivoiriens : AIP, RTI Info, Linfodrome, L'Intelligent d'Abidjan, Le Banco.net, Yeclo, Ivoire Matin, Connectionivoirienne, Abidjan TV ; et France 24, RFI, BBC, Le Monde, Jeune Afrique, Franceinfo, Al Jazeera…) | Fil d'actualité, bouton ⟳ |
+| Indispensable | **Vérification en 4 étapes** (recommandations de l'enseignant) : vérifier la source, vérifier sa crédibilité (6 indicateurs mesurés), croiser au moins 3 sources fiables, authentifier l'information (date, écarts, signalements, outils de fact-checking, origine des photos) | Onglet *Vérifier en 4 étapes* de chaque article, colonne *Crédibilité* des *Médias suivis* |
 | Indispensable | Recherche simple et avancée (mots-clés, date, auteur, source, format, statut, langue) | Barre du haut, *Recherche avancée* |
 | Indispensable | Favoris, dossiers de veille | Étoile ☆, *Favoris*, *Veille & alertes* |
 | Indispensable | Dates de publication **et** de collecte, liens vers les sources originales | Page article |
@@ -62,6 +63,8 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 | Ensuite | Digest quotidien (export PDF, envoi par e-mail), tendances et hashtags, posts prêts à publier | *Digest du jour*, *Tendances* |
 | Ensuite | Lecteur audio persistant, filtre par format, mode lecture épuré, accessibilité | *Multimédia*, *Paramètres* |
 | Ensuite | Export TXT / CSV / BibTeX | *Favoris* |
+| Ensuite | Comptes par Firebase : lien de confirmation par e-mail, mot de passe oublié, **connexion avec Google** | *Connexion* (une fois Firebase configuré, voir docs/DEPLOIEMENT.md) |
+| Ensuite | Tests utilisateurs : questionnaire SUS en ligne, score moyen dans l'administration | *Donner mon avis* (`/avis`), *Administration* |
 | Plus tard | Vérification multimédia avancée, analyse des réseaux sociaux en temps réel, synthèses par grand modèle de langage | Page *Le projet* (feuille de route) |
 
 ---
@@ -137,5 +140,6 @@ Les dates des contenus de démonstration sont recalées à chaque lancement pour
 ## 6. Limites et éthique
 
 - Prisme **compare** la couverture : il aide le lecteur à exercer son esprit critique, sans prétendre établir la vérité.
-- Prisme n'attribue **aucune note aux médias réels**. Les scores affichés en mode démonstration concernent uniquement des sources fictives.
+- Prisme n'attribue **aucune note subjective aux médias réels**. Il affiche six indicateurs vérifiables (identité, statut éditorial, articles signés, sources citées, ton, désaccords), mesurés sur les articles reçus ; un média qui en remplit au moins quatre compte comme source fiable pour le recoupement. Une donnée absente du flux RSS (le nom de l'auteur, par exemple) peut faire baisser un indicateur.
+- « Recoupé par 3 sources fiables » applique la règle du recoupement : ce n'est pas une certification.
 - Aucune donnée personnelle n'est transmise à des tiers ; l'historique peut être effacé à tout moment. Seul le texte d'un article à traduire est envoyé au service MyMemory.

@@ -281,6 +281,17 @@ CREATE TABLE IF NOT EXISTS meta (
     value  TEXT
 );
 
+-- Tests utilisateurs : questionnaire SUS (System Usability Scale, 10 affirmations notées de 1 à 5)
+CREATE TABLE IF NOT EXISTS feedback (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    answers     TEXT    NOT NULL,                 -- dix notes séparées par des virgules
+    sus         REAL    NOT NULL CHECK (sus BETWEEN 0 AND 100),
+    profile     TEXT,                             -- profil déclaré du testeur (facultatif)
+    comment     TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Vue utile pour la présentation : articles + source + catégorie
 CREATE VIEW IF NOT EXISTS v_articles AS
 SELECT a.*, s.name AS source_name, s.reliability AS source_reliability, s.certified AS source_certified,

@@ -158,7 +158,7 @@ function navItems() {
     ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
     ["Prisme"],
     ["/sources", "db", "Médias suivis"], ["/methode", "shield", "Notre méthode"], ...(admin ? [["/admin", "chart", "Administration"]] : []),
-    ["/parametres", "gear", "Paramètres et accessibilité"], ["/projet", "info", "Le projet"],
+    ["/parametres", "gear", "Paramètres et accessibilité"], ["/avis", "users", "Donner mon avis"], ["/projet", "info", "Le projet"],
   ];
 }
 function renderNav() {
@@ -387,7 +387,7 @@ async function pageArticle(id) {
       </div>
       <div class="panel no-print">
         <div class="tabs" id="toolTabs">
-          ${[["summary", "ai", "Résumé automatique"], ["verify", "shield", "Recoupement"], ["translate", "globe", "Traduction"], ["simplify", "text", "Simplification"], ["why", "help", "Pourquoi cet article ?"]].map(([k, i, l], n) => `<button class="tab ${n === 0 ? "active" : ""}" data-act="tool" data-tool="${k}">${ico(i)}${l}</button>`).join("")}
+          ${[["check", "check", "Vérifier en 4 étapes"], ["summary", "ai", "Résumé automatique"], ["verify", "shield", "Recoupement"], ["translate", "globe", "Traduction"], ["simplify", "text", "Simplification"], ["why", "help", "Pourquoi cet article ?"]].map(([k, i, l], n) => `<button class="tab ${n === 0 ? "active" : ""}" data-act="tool" data-tool="${k}">${ico(i)}${l}</button>`).join("")}
           ${a.others.length ? `<a class="tab" href="/sujet/${a.cluster_id}">${ico("columns")}Comparer les ${a.others.length + 1} articles</a>` : ""}
         </div>
         <div id="toolBody"></div>
@@ -397,6 +397,7 @@ async function pageArticle(id) {
       <div class="panel">
         <h3>${ico("db")} La source</h3>
         <dl class="facts"><dt>Média</dt><dd><b>${esc(src.name)}</b></dd><dt>Type</dt><dd>${esc(src.kind)}</dd><dt>Pays</dt><dd>${esc(src.country || "Non renseigné")}</dd><dt>Langue</dt><dd>${esc((src.language || "").toUpperCase())}</dd><dt>Publié</dt><dd>${fmtDate(a.published_at)}</dd><dt>Collecté</dt><dd>${fmtDate(a.first_seen_at)}</dd></dl>
+        ${a.credibility ? `<div class="small" style="margin-top:6px"><b>${esc(a.credibility.statut)}</b><br>Crédibilité : <b>${a.credibility.met}/${a.credibility.total} indicateurs</b>${a.credibility.reliable ? ` <span class="badge b-ok">source fiable</span>` : ""} · <button class="linklike" data-act="tool" data-tool="check">détail</button></div>` : ""}
         ${relBadge(src.reliability, src.certified, src.is_demo)}${src.is_demo ? `<div class="small muted" style="margin-top:8px">${esc(src.reliability_note || "")}</div>` : ""}
       </div>
       <div class="panel">
@@ -412,7 +413,7 @@ async function pageArticle(id) {
     </aside>
   </div>`;
   S.currentArticle = a;
-  tool("summary");
+  tool("check");
 }
 
 async function translateInBrowser(failed, code) {
@@ -442,7 +443,11 @@ async function tool(name) {
   const run = (S.toolRun = (S.toolRun || 0) + 1);
   const outdated = () => run !== S.toolRun;   // l'onglet a changé pendant le chargement : la réponse tardive est ignorée
   try {
-    if (name === "summary") {
+    if (name === "check") {
+      const c = await get(`/api/articles/${a.id}/check`);
+      if (outdated()) return;
+      renderCheck(box, c);
+    } else if (name === "summary") {
       const s = await get(`/api/articles/${a.id}/summary`);
       if (outdated()) return;
       box.innerHTML = s.sentences.length ? `
@@ -491,6 +496,33 @@ async function tool(name) {
         <p class="small muted" style="margin-top:12px">${ico("info")} Transparence : Prisme n'utilise aucun critère caché. Le score combine six critères pondérés, et une part du fil est réservée à des sujets hors de vos habitudes. Vous pouvez modifier vos intérêts dans les <a href="/parametres">paramètres</a> ou effacer votre historique à tout moment.</p>`;
     }
   } catch (e) { if (!outdated()) box.innerHTML = `<div class="alert-line bad">${ico("alert")}${esc(e.message)}</div>`; }
+}
+
+const stepMark = (ok) => `<span class="step-mark ${ok ? "ok" : "ko"}" role="img" aria-label="${ok ? "Étape validée" : "Étape non validée"}">${ico(ok ? "check" : "alert")}</span>`;
+const critList = (items, warnIcon = "x") => `<ul class="crit">${items.map((k) => `<li class="${k.ok ? "ok" : "ko"}">${ico(k.ok ? "check" : warnIcon)}<span><b>${esc(k.label)}</b> : ${esc(k.detail)}</span></li>`).join("")}</ul>`;
+function renderCheck(box, c) {
+  const [s1, s2, s3, s4] = c.steps;
+  const fc = c.factchecks;
+  const link = (v) => safeUrl(v) ? `<a href="${esc(safeUrl(v))}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(v);
+  box.innerHTML = `
+    <div class="row between" style="margin-bottom:6px"><h3 style="margin:0">Vérifier en 4 étapes</h3><span class="badge ${c.passed === c.total ? "b-ok" : c.passed >= 2 ? "b-info" : "b-warn"}">${c.passed} étape${c.passed > 1 ? "s" : ""} validée${c.passed > 1 ? "s" : ""} sur ${c.total}</span></div>
+    <p class="small muted" style="margin-top:0">La méthode du journaliste : vérifier la source, vérifier sa crédibilité, croiser au moins trois sources fiables, puis authentifier l'information. Prisme vous aide à chaque étape ; la décision finale vous revient.</p>
+    <ol class="steps">
+      <li class="step">${stepMark(s1.ok)}<div><h4>1. ${esc(s1.title)}</h4><dl class="facts">${s1.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${link(v)}</dd>`).join("")}</dl>
+        <div class="small">${esc(s1.detail)} ${safeUrl(s1.original) ? `<a href="${esc(safeUrl(s1.original))}" target="_blank" rel="noopener">Ouvrir l'article original ${ico("ext")}</a>` : ""}</div></div></li>
+      <li class="step">${stepMark(s2.ok)}<div><h4>2. ${esc(s2.title)}</h4>${critList(s2.criteria)}
+        <div class="small muted">${esc(s2.detail)} Mesures prises sur les derniers articles reçus par Prisme : une donnée absente du flux RSS, comme le nom de l'auteur, peut faire baisser un indicateur.</div></div></li>
+      <li class="step">${stepMark(s3.ok)}<div><h4>3. ${esc(s3.title)}</h4>
+        <div class="meter" role="img" aria-label="${s3.count} sources fiables sur ${s3.target} attendues">${Array.from({ length: s3.target }, (_, i) => `<i class="${i < s3.count ? "on" : ""}"></i>`).join("")}<span>${Math.min(s3.count, s3.target)} / ${s3.target}</span></div>
+        <div class="small" style="margin:6px 0">${esc(s3.detail)}</div>
+        <ul class="crit">${s3.media.map((m) => `<li class="${m.reliable ? "ok" : "ko"}">${ico(m.reliable ? "check" : "x")}<span><b>${esc(m.publisher)}</b>${m.self ? " (cet article)" : ""} : ${m.reliable ? "source fiable" : "non comptée, moins de 4 indicateurs"} (${m.met}/6)${m.self ? "" : ` · <a href="/article/${m.article_id}">${esc(m.title)}</a>`}</span></li>`).join("")}</ul>
+        ${s3.media.length > 1 ? `<button class="btn sm" data-act="tool" data-tool="verify">${ico("shield")} Voir les passages comparés</button>` : ""}</div></li>
+      <li class="step">${stepMark(s4.ok)}<div><h4>4. ${esc(s4.title)}</h4>${critList(s4.checks, "alert")}
+        ${fc && fc.length ? `<b class="small">Vérifications publiées par des fact-checkeurs</b><ul class="small">${fc.map((f) => `<li><a href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">${esc(f.publisher || "Fact-checking")}</a> : <b>${esc(f.rating || "")}</b> · « ${esc(f.claim)} »</li>`).join("")}</ul>` : fc ? `<div class="small muted">Aucune vérification publiée trouvée par Google Fact Check pour ce sujet.</div>` : ""}
+        <div class="small" style="margin-top:8px"><b>Contrôler par soi-même :</b></div>
+        <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px">${s4.tools.map((t) => `<a class="btn sm" href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">${ico("ext")} ${esc(t.label)}</a>`).join("")}</div>
+        <div class="small muted" style="margin-top:8px">${esc(s4.detail)}</div></div></li>
+    </ol>`;
 }
 
 const CLAIM_TYPES = { chiffre: "Donnée chiffrée", citation: "Citation", attribution: "Attribution", causalite: "Lien de causalité", absolu: "Formulation absolue", rumeur: "Formulation conditionnelle / rumeur" };
@@ -753,13 +785,15 @@ async function pageSources() {
   const list = await get("/api/sources");
   const admin = S.user && S.user.role === "admin";
   main().innerHTML = `
-    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias, parfois plusieurs par rubrique pour un même média, et renvoie toujours vers l'article original. Il ne note pas les médias.</p></div>
+    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias, parfois plusieurs par rubrique pour un même média, et renvoie toujours vers l'article original. Il ne donne pas de note subjective : il affiche six indicateurs vérifiables, mesurés sur les articles reçus. Un média qui en remplit au moins quatre compte comme source fiable pour le recoupement.</p></div>
       ${admin ? `<button class="btn primary" data-act="addsource">${ico("plus")} Ajouter un flux RSS</button>` : ""}</div>
     <div class="panel table-wrap" style="padding:0"><table class="t">
-      <thead><tr><th>Média</th><th>Type</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
+      <thead><tr><th>Média</th><th>Type</th><th>Crédibilité</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
       <tbody>${list.map((s) => `<tr style="${s.active ? "" : "opacity:.5"}">
         <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span> ${relBadge(s.reliability, s.certified, 1)}` : ""}<div class="small muted">${safeUrl(s.website) ? `<a href="${esc(safeUrl(s.website))}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note || "")}</div></td>
-        <td>${esc(s.kind)}</td><td>${esc(s.country || "")}</td><td>${esc(s.language.toUpperCase())}</td>
+        <td>${esc(s.kind)}</td>
+        <td>${s.credibility ? `<span class="badge ${s.credibility.reliable ? "b-ok" : ""}" title="${esc(s.credibility.criteria.map((c) => `${c.ok ? "Oui" : "Non"} : ${c.label} (${c.detail})`).join("\n"))}">${s.credibility.met}/${s.credibility.total}${s.credibility.reliable ? " · fiable" : ""}</span><div class="small muted">${esc(s.credibility.statut)}</div>` : "—"}</td>
+        <td>${esc(s.country || "")}</td><td>${esc(s.language.toUpperCase())}</td>
         <td>${s.articles}</td>
         <td class="small">${s.feed_url ? (s.last_fetched_at ? fmtDate(s.last_fetched_at) : "jamais") : "—"}${s.last_error ? `<div class="small" style="color:var(--bad)" title="${esc(s.last_error)}">échec de collecte</div>` : ""}</td>
         ${admin ? `<td><div class="row"><label class="small row" style="gap:4px"><input type="checkbox" data-act="srcactive" data-id="${s.id}" ${s.active ? "checked" : ""}>active</label>${!s.is_demo ? `<button class="btn sm danger" data-act="srcdel" data-id="${s.id}" aria-label="Supprimer ${esc(s.name)}">${ico("trash")}</button>` : ""}</div></td>` : ""}
@@ -771,9 +805,18 @@ function pageMethod() {
     <div style="max-width:760px">
       <span class="kicker">Transparence</span><h1>Notre méthode</h1>
       <p class="lead">Prisme mesure comment plusieurs médias couvrent un même événement. Il ne dit pas si un fait est vrai.</p>
+      <h2>La vérification en quatre étapes</h2>
+      <p>Chaque article propose l'onglet « Vérifier en 4 étapes », qui suit la méthode du journaliste.</p>
+      <ol>
+        <li><b>Vérifier la source :</b> média, statut éditorial, pays, auteur et lien vers l'article original.</li>
+        <li><b>Vérifier la crédibilité de la source :</b> six indicateurs mesurés sur ses articles reçus (identité vérifiable, statut éditorial connu, articles signés, sources citées, ton mesuré, peu de désaccords). Ce ne sont pas des notes subjectives : chaque indicateur affiche sa mesure. Un média qui en remplit au moins quatre compte comme source fiable.</li>
+        <li><b>Croiser au moins trois sources fiables :</b> Prisme compte les médias fiables distincts qui traitent le même événement.</li>
+        <li><b>Authentifier l'information :</b> date d'origine, écarts de chiffres ou démentis, signalements des lecteurs, puis liens vers des outils de fact-checking (Google Fact Check, AFP Factuel, Africa Check), les sites officiels et la recherche de l'origine d'une photo.</li>
+      </ol>
       <h2>Ce que signifient les statuts</h2>
       <dl class="facts" style="grid-template-columns:minmax(120px,190px) 1fr;gap:10px 16px;font-size:.95rem;margin-bottom:22px">
         <dt><b>Source unique</b></dt><dd>Un seul média suivi par Prisme en parle pour l'instant. Cela ne veut pas dire que l'information est fausse.</dd>
+        <dt><b>Recoupé par N sources fiables</b></dt><dd>Au moins trois médias distincts, chacun remplissant au moins quatre indicateurs de crédibilité, traitent le même événement. C'est la règle du recoupement ; ce n'est pas une certification.</dd>
         <dt><b>Repris par N sources</b></dt><dd>N médias distincts publient sur le même événement. Ils peuvent tous reprendre une même dépêche : ce n'est donc pas une preuve.</dd>
         <dt><b>Chiffres divergents</b></dt><dd>Des médias donnent des chiffres différents pour une même donnée. Un bilan peut aussi simplement évoluer dans le temps.</dd>
         <dt><b>Démenti signalé</b></dt><dd>Un média suivi emploie un vocabulaire de démenti sur ce sujet. Lisez les sources pour juger.</dd>
@@ -795,7 +838,7 @@ function pageMethod() {
 
 async function pageAdmin() {
   if (!S.user || S.user.role !== "admin") return needLogin("l'administration (compte administrateur)");
-  const [st, users, changes] = await Promise.all([get("/api/stats"), get("/api/admin/users"), get("/api/admin/changes")]);
+  const [st, users, changes, fb] = await Promise.all([get("/api/stats"), get("/api/admin/users"), get("/api/admin/changes"), get("/api/feedback")]);
   const max = (arr) => Math.max(1, ...arr.map((x) => x.n));
   const ST_COL = { verifie: "var(--ok)", partiel: "var(--info)", non_verifie: "var(--warn)", conteste: "var(--bad)", en_attente: "var(--muted)" };
   main().innerHTML = `
@@ -812,6 +855,7 @@ async function pageAdmin() {
       <div class="panel"><h3>Contenus par rubrique</h3>${st.by_category.map((v) => `<div class="hbar"><span>${esc(v.name)}</span><span class="track"><i style="width:${v.n / max(st.by_category) * 100}%"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
       <div class="panel"><h3>Contenus par source (top 12)</h3>${st.by_source.map((v) => `<div class="hbar"><span class="small" title="${esc(v.name)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v.name)}</span><span class="track"><i style="width:${v.n / max(st.by_source) * 100}%"></i></span><span class="v">${v.n}</span></div>`).join("")}</div>
     </div>
+    <div class="panel" style="margin-top:16px"><h3>${ico("users")} Tests utilisateurs (SUS)</h3>${fb.count ? `<p class="small"><b>${fb.count}</b> réponse(s) · score moyen <b>${fb.average}/100</b> · objectif ${fb.target} ${fb.average >= fb.target ? `<span class="badge b-ok">atteint</span>` : `<span class="badge b-warn">pas encore atteint</span>`}</p>${fb.comments.length ? `<ul class="small">${fb.comments.map((c) => `<li>${esc(c.comment)} <span class="muted">(${esc(c.profile || "profil non précisé")}, ${fmtDate(c.created_at, false)}, SUS ${c.sus})</span></li>`).join("")}</ul>` : ""}` : `<p class="small muted">Aucune réponse pour l'instant. Partagez le lien <a href="/avis">/avis</a> aux testeurs.</p>`}</div>
     <div class="panel" style="margin-top:16px"><h3>${ico("refresh")} Dernière collecte</h3>${st.last_fetch ? `<p class="small">${fmtDate(st.last_fetch.finished_at)} — ${st.last_fetch.sources_ok} source(s) OK, ${st.last_fetch.sources_ko} en échec, <b>${st.last_fetch.new_articles}</b> nouveau(x) contenu(s), ${esc(st.last_fetch.message || "")}.</p>` : `<p class="small muted">Aucune collecte terminée (connexion Internet requise).</p>`}${st.fetching ? `<span class="badge b-info">Collecte en cours…</span>` : ""}</div>
     <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("clock")} Journal des modifications</h3>${changes.length ? `<table class="t"><thead><tr><th>Date</th><th>Auteur</th><th>Objet</th><th>Action</th><th>Détail</th></tr></thead><tbody>${changes.slice(0, 20).map((c) => `<tr><td class="small">${fmtDate(c.at)}</td><td>${esc(c.actor)}</td><td>${esc(c.entity)} ${c.entity_id ?? ""}</td><td>${esc(c.action)}</td><td class="small">${esc(c.detail || "")}</td></tr>`).join("")}</tbody></table>` : `<p class="small muted">Aucune modification enregistrée.</p>`}</div>
     <div class="panel table-wrap" style="margin-top:16px"><h3>${ico("users")} Utilisateurs (${users.length})</h3><table class="t"><thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th>Pays</th><th>Profil</th><th>Lectures</th><th>Favoris</th><th>Signalements</th><th>Inscription</th></tr></thead>
@@ -845,11 +889,12 @@ async function pageSettings() {
       <div class="panel">
         <h2>${ico("user")} Mon compte</h2>
         <form id="accForm"><label class="f"><span>Nom affiché</span><input class="input" name="display_name" value="${esc(u.display_name)}"></label>
-        <label class="f"><span>E-mail</span><input class="input" type="email" name="email" value="${esc(u.email)}"></label>
+        <label class="f"><span>E-mail</span><input class="input" type="email" name="email" value="${esc(u.email)}" ${fbOn() && u.role !== "admin" ? "readonly" : ""}></label>
         <label class="f"><span>Pays de résidence</span><select class="input" name="country"><option value="" ${u.country ? "" : "selected"} disabled>Choisissez votre pays</option>${countryOptions(countries, u.country)}</select></label>
+        ${fbOn() && u.role !== "admin" ? `<p class="small muted">Pour changer de mot de passe, recevez un lien sécurisé par e-mail.</p><button type="button" class="btn" data-act="fbreset">${ico("social")} Recevoir un lien pour changer de mot de passe</button><p></p>` : `
         <label class="f"><span>Mot de passe actuel (requis pour en changer)</span><input class="input" type="password" name="current_password" autocomplete="current-password"></label>
         <label class="f"><span>Nouveau mot de passe, 8 caractères minimum (facultatif)</span><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password"></label>
-        <label class="f"><span>Confirmez le nouveau mot de passe</span><input class="input" type="password" name="new_password_confirm" minlength="8" autocomplete="new-password"></label>
+        <label class="f"><span>Confirmez le nouveau mot de passe</span><input class="input" type="password" name="new_password_confirm" minlength="8" autocomplete="new-password"></label>`}
         <button class="btn primary">${ico("check")} Mettre à jour</button></form>
       </div>` : `<div class="panel"><h2>Personnalisation</h2><p class="muted">Connectez-vous pour choisir vos centres d'intérêt, vos alertes et la part de découverte de votre fil. En mode invité, les préférences d'affichage sont mémorisées dans ce navigateur.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`}
     </div>`;
@@ -869,7 +914,7 @@ async function pageSettings() {
     toast("Personnalisation enregistrée : votre fil a été recalculé.");
   };
   $("#clearH").onclick = async () => { if (confirm("Effacer tout votre historique de lecture ?")) { await del("/api/history"); toast("Historique effacé."); } };
-  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const data = Object.fromEntries(new FormData(e.target)); if (!data.country) delete data.country; if ((data.new_password || "") !== (data.new_password_confirm || "")) { toast("Les deux mots de passe ne sont pas identiques.", 1); return; } const r = await put("/api/me", data); S.user = r.user; renderNav(); e.target.current_password.value = ""; e.target.new_password.value = ""; e.target.new_password_confirm.value = ""; toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
+  $("#accForm").onsubmit = async (e) => { e.preventDefault(); try { const data = Object.fromEntries(new FormData(e.target)); if (!data.country) delete data.country; if ((data.new_password || "") !== (data.new_password_confirm || "")) { toast("Les deux mots de passe ne sont pas identiques.", 1); return; } const r = await put("/api/me", data); S.user = r.user; renderNav(); e.target.querySelectorAll("input[type=password]").forEach((x) => { x.value = ""; }); toast("Compte mis à jour."); } catch (err) { toast(err.message, 1); } };
 }
 
 const PERSONAS = [
@@ -880,6 +925,67 @@ const PERSONAS = [
   ["paul", "Paul", "Senior, lecteur occasionnel", "Grande police, mode simplifié, favoris en un clic"],
   ["sara", "Sara", "Chercheuse / archiviste", "Recherche par date et auteur, export BibTeX, fiabilité"],
 ];
+// Firebase Authentication : Google envoie les e-mails de confirmation et de réinitialisation, et gère la connexion avec Google.
+const FB_VERSION = "10.12.2";
+let fbReady = null;
+const fbOn = () => !!(S.config && S.config.firebase);
+function loadScript(src) {
+  return new Promise((ok, ko) => { const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = () => ko(new Error("Le service de connexion n'a pas pu être chargé. Vérifiez votre connexion Internet.")); document.head.appendChild(el); });
+}
+function firebaseAuth() {
+  fbReady = fbReady || (async () => {
+    for (const m of ["app", "auth"]) await loadScript(`https://www.gstatic.com/firebasejs/${FB_VERSION}/firebase-${m}-compat.js`);
+    if (!firebase.apps.length) firebase.initializeApp(S.config.firebase);
+    const auth = firebase.auth();
+    auth.languageCode = "fr";
+    return auth;
+  })().catch((e) => { fbReady = null; throw e; });
+  return fbReady;
+}
+const FB_ERRORS = {
+  "auth/invalid-credential": "E-mail ou mot de passe incorrect.", "auth/invalid-login-credentials": "E-mail ou mot de passe incorrect.",
+  "auth/wrong-password": "E-mail ou mot de passe incorrect.", "auth/user-not-found": "E-mail ou mot de passe incorrect.",
+  "auth/email-already-in-use": "Un compte existe déjà avec cet e-mail. Connectez-vous ou utilisez « Mot de passe oublié ».",
+  "auth/weak-password": "Mot de passe trop faible : 8 caractères minimum.", "auth/invalid-email": "Adresse e-mail invalide.",
+  "auth/too-many-requests": "Trop de tentatives : réessayez dans quelques minutes.", "auth/network-request-failed": "Connexion Internet indisponible.",
+  "auth/popup-closed-by-user": "La fenêtre Google a été fermée avant la fin de la connexion.", "auth/popup-blocked": "Votre navigateur a bloqué la fenêtre Google : autorisez les fenêtres surgissantes pour ce site.",
+  "auth/unauthorized-domain": "Ce site n'est pas encore autorisé dans Firebase (Authentication > Paramètres > Domaines autorisés).",
+  "auth/operation-not-allowed": "Ce mode de connexion n'est pas activé dans Firebase.",
+  "auth/api-key-not-valid.-please-pass-a-valid-api-key.": "La configuration Firebase du site est invalide (clé d'API) : prévenez l'administrateur.",
+};
+const fbMsg = (e) => FB_ERRORS[e && e.code] || (e && e.message) || "Erreur de connexion.";
+async function fbFinish(user) {
+  const pending = store.get("prisme_pending_reg", null);
+  const extra = pending && pending.email === user.email ? pending : {};
+  const r = await post("/api/auth/firebase", { id_token: await user.getIdToken(true), display_name: extra.display_name, country: extra.country, interests: extra.interests });
+  store.del("prisme_pending_reg");
+  await onLogged(r);
+  toast(`Connecté(e) : ${r.user.display_name}`);
+}
+async function fbLogin(email, password) {
+  const auth = await firebaseAuth();
+  const cred = await auth.signInWithEmailAndPassword(email, password);
+  if (!cred.user.emailVerified) {
+    await cred.user.sendEmailVerification().catch(() => {});
+    await auth.signOut();
+    toast("Votre adresse n'est pas encore confirmée : un nouveau lien vient de vous être envoyé. Regardez aussi dans les indésirables.", 1);
+    return;
+  }
+  await fbFinish(cred.user);
+}
+async function fbGoogle() {
+  try {
+    const auth = await firebaseAuth();
+    const cred = await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    await fbFinish(cred.user);
+  } catch (e) { toast(fbMsg(e), 1); }
+}
+async function fbResetLink(email) {
+  try { await (await firebaseAuth()).sendPasswordResetEmail(email); }
+  catch (e) { if (e.code !== "auth/user-not-found") { toast(fbMsg(e), 1); return false; } }
+  return true;
+}
+
 const countryOptions = (list, cur) => list.map((c) => `<option ${c === cur ? "selected" : ""}>${esc(c)}</option>`).join("");
 async function pageLogin() {
   const countries = await get("/api/countries").catch(() => []);
@@ -888,6 +994,7 @@ async function pageLogin() {
     <div class="auth-wrap">
       <div class="panel">
         <div class="tabs"><button class="tab active" data-act="authtab" data-t="login">Connexion</button><button class="tab" data-act="authtab" data-t="register">Créer un compte</button></div>
+        ${fbOn() ? `<button type="button" class="btn google" data-act="google" style="width:100%;justify-content:center"><span class="g-logo" aria-hidden="true">G</span> Continuer avec Google</button><div class="or"><span>ou avec votre e-mail</span></div>` : ""}
         <form id="loginForm"><label class="f"><span>E-mail</span><input class="input" name="username" required autocomplete="username" inputmode="email"></label>
           <label class="f"><span>Mot de passe</span><input class="input" type="password" name="password" required autocomplete="current-password"></label>
           <button class="btn primary" style="width:100%;justify-content:center">Se connecter</button>
@@ -899,8 +1006,8 @@ async function pageLogin() {
           <label class="f"><span>Confirmez le mot de passe</span><input class="input" type="password" name="password_confirm" required minlength="8" autocomplete="new-password"></label></div>
           <div class="f"><span style="display:block;font-weight:600;font-size:.88rem;margin-bottom:6px">Vos centres d'intérêt</span><div class="chips">${S.cats.map((c) => `<label class="chip"><input type="checkbox" name="interests" value="${c.slug}" style="margin-right:4px">${esc(c.name)}</label>`).join("")}</div></div>
           <div id="codeBox" hidden style="margin-top:10px"><div class="alert-line info small" id="codeInfo" style="margin-bottom:10px"></div>
-            <label class="f"><span>Code à 6 chiffres reçu par e-mail</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></div>
-          <button class="btn primary" id="regBtn" style="width:100%;justify-content:center;margin-top:8px">${S.config && S.config.email_verification ? "Recevoir mon code par e-mail" : "Créer mon compte"}</button></form>
+            <label class="f" id="codeField" ${fbOn() ? "hidden" : ""}><span>Code à 6 chiffres reçu par e-mail</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></div>
+          <button class="btn primary" id="regBtn" style="width:100%;justify-content:center;margin-top:8px">${fbOn() ? "Créer mon compte" : S.config && S.config.email_verification ? "Recevoir mon code par e-mail" : "Créer mon compte"}</button></form>
         <p class="small muted" style="margin-bottom:0">Un compte permet de suivre des mots-clés, d'enregistrer des favoris et de personnaliser le fil. Lire Prisme n'en nécessite pas.</p>
       </div>
       ${S.config && S.config.demo_logins ? `<div class="panel">
@@ -918,7 +1025,23 @@ async function pageLogin() {
     const btn = $("#regBtn");
     btn.disabled = true;
     try {
-      if (S.config && S.config.email_verification && $("#codeBox").hidden) {
+      if (fbOn()) {
+        const auth = await firebaseAuth();
+        if ($("#codeBox").hidden) {
+          const email = String(fd.get("email")).trim();
+          const cred = await auth.createUserWithEmailAndPassword(email, fd.get("password"));
+          await cred.user.updateProfile({ displayName: fd.get("display_name") });
+          await cred.user.sendEmailVerification();
+          store.set("prisme_pending_reg", { email: cred.user.email, display_name: fd.get("display_name"), country: fd.get("country"), interests: fd.getAll("interests") });
+          $("#codeInfo").innerHTML = `Un lien de confirmation vient d'être envoyé à <b>${esc(email)}</b>. Ouvrez cet e-mail, cliquez sur le lien, puis revenez ici. Pensez à regarder dans les indésirables.`;
+          $("#codeBox").hidden = false;
+          btn.textContent = "J'ai confirmé mon adresse";
+        } else {
+          await auth.currentUser.reload();
+          if (auth.currentUser.emailVerified) await fbFinish(auth.currentUser);
+          else toast("Adresse pas encore confirmée : cliquez sur le lien reçu par e-mail, puis réessayez.", 1);
+        }
+      } else if (S.config && S.config.email_verification && $("#codeBox").hidden) {
         const c = await post("/api/email/code", { email: fd.get("email"), purpose: "register" });
         $("#codeInfo").textContent = c.demo_code
           ? `Mode démonstration : aucun e-mail n'est envoyé. Votre code est ${c.demo_code}.`
@@ -930,13 +1053,18 @@ async function pageLogin() {
         const r = await post("/api/register", { ...Object.fromEntries(fd), interests: fd.getAll("interests") });
         await onLogged(r); toast("Bienvenue sur Prisme !");
       }
-    } catch (err) { toast(err.message, 1); }
+    } catch (err) { toast(fbMsg(err), 1); }
     btn.disabled = false;
   };
 }
 async function doLogin(body) {
-  try { const r = await post("/api/login", body); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); }
-  catch (e) { toast(e.message, 1); }
+  try {
+    if (fbOn() && String(body.username).includes("@")) {
+      try { return await fbLogin(String(body.username).trim(), body.password); }
+      catch (e) { if (!/invalid-credential|invalid-login-credentials|user-not-found|wrong-password/.test(e.code || "")) throw e; }   // sinon : compte local (administration)
+    }
+    const r = await post("/api/login", body); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`);
+  } catch (e) { toast(fbMsg(e), 1); }
 }
 async function onLogged(r) {
   S.token = r.token; S.user = r.user; store.set("prisme_token", r.token);
@@ -945,6 +1073,37 @@ async function onLogged(r) {
 function logoutLocal() { S.token = null; S.user = null; S.favs = new Set(); S.unread = 0; store.del("prisme_token"); applyPrefs(); renderNav(); }
 function needLogin(what) {
   main().innerHTML = `<div class="panel empty">${ico("user")}<h2>Connexion requise</h2><p>Connectez-vous pour accéder à ${esc(what)}.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`;
+}
+
+const SUS = [
+  "Je pense que j'aimerais utiliser Prisme régulièrement.", "J'ai trouvé Prisme inutilement complexe.", "J'ai trouvé Prisme facile à utiliser.",
+  "Je pense que j'aurais besoin de l'aide d'une personne technique pour utiliser Prisme.", "J'ai trouvé que les différentes fonctions de Prisme étaient bien intégrées.",
+  "J'ai trouvé qu'il y avait trop d'incohérences dans Prisme.", "J'imagine que la plupart des gens apprendraient très vite à utiliser Prisme.",
+  "J'ai trouvé Prisme très lourd à utiliser.", "Je me suis senti(e) très en confiance en utilisant Prisme.", "J'ai dû apprendre beaucoup de choses avant de pouvoir utiliser Prisme.",
+];
+function pageFeedback() {
+  main().innerHTML = `
+    <div style="max-width:760px">
+      <span class="kicker">Tests utilisateurs</span><h1>Donnez votre avis sur Prisme</h1>
+      <p class="lead">Dix affirmations, notées de 1 (pas du tout d'accord) à 5 (tout à fait d'accord). Ce questionnaire standard, le SUS, mesure la facilité d'utilisation. Deux minutes suffisent, sans compte.</p>
+      <form id="susForm" class="panel">
+        ${SUS.map((q, i) => `<fieldset class="sus-q"><legend>${i + 1}. ${esc(q)}</legend><div class="sus-scale">${[1, 2, 3, 4, 5].map((v) => `<label><input type="radio" name="q${i}" value="${v}" required><span>${v}</span></label>`).join("")}</div></fieldset>`).join("")}
+        <div class="small muted row between" style="margin:4px 0 14px"><span>1 = pas du tout d'accord</span><span>5 = tout à fait d'accord</span></div>
+        <label class="f"><span>Votre profil (facultatif)</span><select class="input" name="profile"><option value="">Non précisé</option>${["Étudiant(e)", "Journaliste", "Community manager", "Agent de l'administration", "Enseignant(e) ou chercheur(se)", "Autre"].map((x) => `<option>${x}</option>`).join("")}</select></label>
+        <label class="f"><span>Un commentaire ? (facultatif)</span><textarea class="input" name="comment" rows="3" maxlength="1000"></textarea></label>
+        <button class="btn primary">${ico("check")} Envoyer mon avis</button>
+      </form>
+      <div id="susOut"></div>
+    </div>`;
+  $("#susForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const r = await post("/api/feedback", { answers: SUS.map((_, i) => +fd.get("q" + i)), profile: fd.get("profile"), comment: fd.get("comment") });
+      e.target.hidden = true;
+      $("#susOut").innerHTML = `<div class="alert-line ok">${ico("check")}<span>Merci ! Votre score d'utilisabilité est de <b>${r.sus}/100</b>. L'objectif du projet est d'au moins 85.</span></div>`;
+    } catch (err) { toast(err.message, 1); }
+  };
 }
 
 function pageProject() {
@@ -1019,6 +1178,16 @@ async function openShare(id) {
     <button class="btn primary" style="margin-top:10px" data-act="copy" data-text="${esc(postText(a))}">${ico("copy")} Copier la publication</button>`);
 }
 function openForgot() {
+  if (fbOn()) {
+    modal(`<div class="row between"><h2 style="margin:0">Mot de passe oublié</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+      <p class="small muted">Saisissez votre adresse : si un compte existe, vous recevez un lien pour choisir un nouveau mot de passe. Prisme n'envoie jamais de mot de passe.</p>
+      <form id="forgotForm"><label class="f"><span>E-mail</span><input class="input" type="email" name="email" required autocomplete="email"></label><button class="btn primary">Recevoir le lien</button></form>`);
+    $("#forgotForm").onsubmit = async (e) => {
+      e.preventDefault();
+      if (await fbResetLink(String(new FormData(e.target).get("email")).trim())) { closeModal(); toast("Si un compte existe avec cette adresse, un lien vient d'y être envoyé. Regardez aussi dans les indésirables."); }
+    };
+    return;
+  }
   if (!S.config || !S.config.email_verification) {
     modal(`<div class="row between"><h2 style="margin:0">Mot de passe oublié</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
       <div class="alert-line warn" style="margin-top:12px">${ico("alert")}<span>La récupération par e-mail n'est pas encore activée sur ce site. En attendant, créez un nouveau compte avec une autre adresse.</span></div>`);
@@ -1141,6 +1310,8 @@ document.addEventListener("click", async (e) => {
       case "mmtab": mmTab = el.dataset.tab; pageMultimedia(); break;
       case "demo": { const r = await post("/api/demo-login", { username: el.dataset.u }); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); break; }
       case "forgot": openForgot(); break;
+      case "google": fbGoogle(); break;
+      case "fbreset": if (await fbResetLink(S.user.email)) toast(`Un lien pour changer de mot de passe vient d'être envoyé à ${S.user.email}.`); break;
       case "textsettings": openTextSettings(); break;
       case "setfont": await savePrefs({ font_family: el.dataset.font }); $$(".font-choice").forEach((b) => { const on = b === el; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }); toast("Police enregistrée."); break;
       case "fontsize": {
@@ -1157,7 +1328,7 @@ document.addEventListener("click", async (e) => {
         modal(`<div class="row"><span class="avatar">${initials(S.user.display_name)}</span><div><b>${esc(S.user.display_name)}</b><div class="small muted">${esc(S.user.persona || S.user.email)}</div></div></div>
           <div class="stack" style="margin-top:16px"><a class="btn" href="/parametres" data-close>${ico("gear")} Paramètres</a><a class="btn" href="/favoris" data-close>${ico("star")} Mes favoris</a><a class="btn" href="/veille" data-close>${ico("eye")} Ma veille</a>
           <button class="btn danger" data-act="logout">${ico("logout")} Se déconnecter</button></div>`); break;
-      case "logout": await post("/api/logout").catch(() => {}); logoutLocal(); closeModal(); toast("Vous êtes déconnecté(e)."); nav("/"); route(); break;
+      case "logout": await post("/api/logout").catch(() => {}); if (fbReady) (await fbReady.catch(() => null))?.signOut().catch(() => {}); logoutLocal(); closeModal(); toast("Vous êtes déconnecté(e)."); nav("/"); route(); break;
       case "alertdel": await del(`/api/alerts/${id}`); pageVeille(); break;
       case "folderdel": if (confirm("Supprimer ce dossier ? Les articles restent dans vos favoris.")) { await del(`/api/folders/${id}`); pageVeille(); } break;
       case "readall": await post("/api/notifications/read"); await refreshMe(); pageNotifications(); break;
@@ -1250,7 +1421,7 @@ const ROUTES = [
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
   [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
   [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
-  [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"],
+  [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
 async function route() {
   const h = location.pathname + location.search;

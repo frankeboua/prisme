@@ -1,6 +1,8 @@
 """Moteur métier de Prisme : doublons, vérification, résumé, comparaison, recommandation."""
 import math
 import re
+import time
+import urllib.parse
 from collections import Counter, defaultdict
 
 from . import db, nlp
@@ -17,11 +19,15 @@ CLAIM_LABEL = {"verifie": "Passage proche dans 2 sources ou plus", "partiel": "P
                "non_verifie": "Aucun passage proche", "conteste": "Version différente"}
 DEBUNK = ("démenti", "dément", "infondé", "infondée", "aucune preuve", "intox", "fake news",
           "n'a jamais", "no evidence", "debunk", "erroné", "erronée", "fausse information")
+CROSS_TARGET = 3      # règle du recoupement : au moins trois sources fiables distinctes
+RELIABLE_MIN = 4      # indicateurs de crédibilité remplis (sur 6) pour qu'un média compte comme source fiable
 
 
-def status_label(status, source_count=None, reason=None):
+def status_label(status, source_count=None, reason=None, reliable=None):
     if status == "conteste":
         return REASON_LABEL.get(reason, STATUS_LABEL["conteste"])
+    if status == "verifie" and reliable and reliable >= CROSS_TARGET:
+        return f"Recoupé par {reliable} sources fiables"
     if status == "verifie" and source_count and source_count >= 3:
         return f"Repris par {source_count} sources"
     return STATUS_LABEL.get(status, "")
@@ -314,6 +320,130 @@ def get_verification(conn, article_id):
 
 
 # =====================================================================
+#  2 bis. VÉRIFICATION EN QUATRE ÉTAPES
+#  Vérifier la source, vérifier sa crédibilité, croiser au moins trois
+#  sources fiables, authentifier l'information.
+# =====================================================================
+PRO_KINDS = {"agence": "Agence de presse", "tv": "Télévision", "radio": "Radio", "presse": "Presse écrite"}
+KIND_LABEL = {**PRO_KINDS, "web": "Site d'information", "podcast": "Podcast", "social": "Réseau social"}
+ATTRIBUTION = re.compile(r"\b(selon|d['’]après|a (?:déclaré|indiqué|affirmé|annoncé|précisé|expliqué|souligné)|ont (?:déclaré|indiqué|annoncé)|"
+                         r"a-t-(?:il|elle) (?:déclaré|indiqué|ajouté)|communiqué|according to|said)\b", re.I)
+_CRED = {"at": 0.0, "data": {}}
+
+
+def _pct(x):
+    return f"{round(100 * x)} %"
+
+
+def reset_credibility():
+    _CRED["data"] = {}
+
+
+def source_credibility(conn, max_age=600):
+    """Six indicateurs vérifiables par média, mesurés sur ses 80 derniers articles reçus. Ce n'est pas une note subjective :
+    chaque indicateur affiche sa mesure, et un média ne compte comme « source fiable » que s'il en remplit au moins quatre."""
+    if _CRED["data"] and time.monotonic() - _CRED["at"] < max_age:
+        return _CRED["data"]
+    from .seed import SOURCE_PROFILES
+    srcs = {}
+    for s in db.rows(conn, f"SELECT {PUB} pub, s.name, s.kind, s.website, s.country, s.is_demo, s.reliability FROM sources s WHERE s.active=1 ORDER BY s.is_demo, s.id"):
+        srcs.setdefault(s["pub"], s)
+    arts = defaultdict(list)
+    for a in db.rows(conn, f"""SELECT {PUB} pub, a.author, a.title, a.summary, a.verification_status FROM articles a JOIN sources s ON s.id=a.source_id
+                               WHERE s.active=1 ORDER BY a.published_at DESC"""):
+        if len(arts[a["pub"]]) < 80:
+            arts[a["pub"]].append(a)
+    fixed = {r["pub"]: r["n"] for r in db.rows(conn, f"""SELECT {PUB} pub, COUNT(*) n FROM reports r JOIN articles a ON a.id=r.article_id
+                                                        JOIN sources s ON s.id=a.source_id WHERE r.status='corrige' GROUP BY pub""")}
+    out = {}
+    for pub, s in srcs.items():
+        items = arts.get(pub, [])
+        n = len(items)
+        rate = (lambda f: sum(1 for a in items if f(a)) / n) if n else (lambda f: 0.0)
+        signed = rate(lambda a: (a["author"] or "").strip())
+        cited = rate(lambda a: ATTRIBUTION.search(f"{a['title']} {a['summary'] or ''}"))
+        loud = rate(lambda a: nlp.SENSATIONAL.search(a["title"] or ""))
+        disputed = rate(lambda a: a["verification_status"] == "conteste")
+        errors = fixed.get(pub, 0)
+        statut = SOURCE_PROFILES.get(pub) or SOURCE_PROFILES.get(s["name"])
+        if s["is_demo"]:
+            ident = (s["reliability"] >= 60, "Source fictive du scénario de démonstration")
+        else:
+            host = urllib.parse.urlparse(s["website"] or "").netloc
+            ident = (bool(host and s["country"]), f"Site officiel : {host or 'non renseigné'} · Pays : {s['country'] or 'non renseigné'}")
+        known = bool(statut) or s["kind"] in PRO_KINDS
+        none = "Pas encore d'article reçu" if not n else None
+        crit = [
+            {"key": "identite", "label": "Identité vérifiable", "ok": ident[0], "detail": ident[1]},
+            {"key": "statut", "label": "Statut éditorial connu", "ok": known, "detail": statut or (KIND_LABEL.get(s["kind"], s["kind"]) if known else "Statut éditorial non renseigné")},
+            {"key": "signature", "label": "Articles signés", "ok": n > 0 and signed >= 0.5, "detail": none or f"{_pct(signed)} des articles reçus portent un nom d'auteur"},
+            {"key": "attribution", "label": "Cite ses sources", "ok": n > 0 and cited >= 0.3, "detail": none or f"{_pct(cited)} des articles reçus citent une source (« selon », « a déclaré »…)"},
+            {"key": "ton", "label": "Ton mesuré", "ok": n > 0 and loud <= 0.25, "detail": none or f"{_pct(loud)} des titres au ton sensationnaliste (« URGENT », « choc »…)"},
+            {"key": "concordance", "label": "Peu de désaccords", "ok": n > 0 and disputed <= 0.15 and not errors,
+             "detail": none or f"{_pct(disputed)} des articles contredits par d'autres médias · {errors} erreur(s) confirmée(s) par la modération"},
+        ]
+        met = sum(1 for c in crit if c["ok"])
+        out[pub] = {"publisher": pub, "statut": crit[1]["detail"], "kind": KIND_LABEL.get(s["kind"], s["kind"]), "website": s["website"], "country": s["country"],
+                    "is_demo": s["is_demo"], "articles": n, "criteria": crit, "met": met, "total": len(crit), "reliable": met >= RELIABLE_MIN}
+    _CRED.update(at=time.monotonic(), data=out)
+    return out
+
+
+def reliable_count(conn, publishers):
+    cred = source_credibility(conn)
+    return sum(1 for p in set(publishers) if cred.get(p, {}).get("reliable"))
+
+
+def _search(prefix, q):
+    return "https://www.google.com/search?q=" + urllib.parse.quote(f"{prefix} {q}")
+
+
+def check_article(conn, a):
+    """Grille de vérification en quatre étapes, à partir d'un article décoré (voir decorate)."""
+    cred = source_credibility(conn)
+    pub = a.get("source_publisher") or a["source_name"]
+    me = cred.get(pub) or {"criteria": [], "met": 0, "total": 6, "reliable": False, "statut": "", "website": None, "country": None, "kind": "", "is_demo": a.get("is_demo")}
+    has_link = bool(a.get("url"))
+    step1 = {"key": "source", "title": "Vérifier la source", "ok": bool(me["criteria"] and me["criteria"][0]["ok"]) and (has_link or bool(a.get("is_demo"))),
+             "facts": [["Média", a["source_name"]], ["Statut", me["statut"] or "Non renseigné"], ["Pays", me["country"] or "Non renseigné"],
+                       ["Site officiel", me["website"] or "Non renseigné"], ["Auteur", a.get("author") or "Non signé dans le flux"]],
+             "original": a.get("url"),
+             "detail": "Média identifié, article original accessible." if has_link else "Contenu fictif de démonstration : pas d'article original."}
+    step2 = {"key": "credibilite", "title": "Vérifier la crédibilité de la source", "ok": me["reliable"], "criteria": me["criteria"], "met": me["met"], "total": me["total"],
+             "detail": f"{me['met']} indicateur(s) sur {me['total']} remplis. Il en faut {RELIABLE_MIN} pour compter comme source fiable."}
+    covering = {}
+    for o in [{"id": a["id"], "title": a["title"], "url": a.get("url"), "publisher": pub, "source_name": a["source_name"], "published_at": a["published_at"]}] + a.get("others", []):
+        covering.setdefault(o.get("publisher") or o["source_name"], o)
+    rows = [{"publisher": p, "article_id": o["id"], "title": o["title"], "url": o.get("url"), "published_at": o["published_at"], "self": p == pub,
+             "reliable": bool(cred.get(p, {}).get("reliable")), "met": cred.get(p, {}).get("met", 0)} for p, o in covering.items()]
+    rows.sort(key=lambda r: (not r["self"], not r["reliable"], -r["met"]))
+    n_rel = sum(1 for r in rows if r["reliable"])
+    step3 = {"key": "recoupement", "title": f"Croiser au moins {CROSS_TARGET} sources fiables", "ok": n_rel >= CROSS_TARGET, "count": n_rel, "target": CROSS_TARGET, "media": rows,
+             "detail": (f"{n_rel} sources fiables distinctes traitent cet événement." if n_rel >= CROSS_TARGET else
+                        f"{n_rel} source(s) fiable(s) sur les {CROSS_TARGET} attendues : l'information reste à recouper.")}
+    f = a["freshness"]
+    open_reports = a.get("reports_count", 0)
+    checks = [
+        {"label": "Date d'origine", "ok": not f.get("recirculating"), "detail": f.get("warning") or f"Publication récente ({f.get('age')}), cohérente avec la date de collecte."},
+        {"label": "Concordance des médias", "ok": a["verification_status"] != "conteste",
+         "detail": f"{a['verification_label']} : d'autres médias rapportent une version différente." if a["verification_status"] == "conteste" else "Aucun écart de chiffres ni démenti repéré chez les médias suivis."},
+        {"label": "Signalements des lecteurs", "ok": not open_reports, "detail": f"{open_reports} signalement(s) en cours d'examen." if open_reports else "Aucun signalement en attente."},
+    ]
+    q = a["title"][:110]
+    tools = [{"label": "Google Fact Check Explorer", "url": "https://toolbox.google.com/factcheck/explorer/search/" + urllib.parse.quote(q) + ";hl=fr"},
+             {"label": "AFP Factuel", "url": _search("site:factuel.afp.com", q)}, {"label": "Africa Check", "url": _search("site:africacheck.org", q)},
+             {"label": "Sources officielles ivoiriennes (gouv.ci)", "url": _search("site:gouv.ci", q)}]
+    img = a.get("image_url") or ""
+    if img.lower().startswith(("http://", "https://")):
+        tools += [{"label": "Origine de la photo (Google Lens)", "url": "https://lens.google.com/uploadbyurl?url=" + urllib.parse.quote(img, safe="")},
+                  {"label": "Origine de la photo (TinEye)", "url": "https://tineye.com/search?url=" + urllib.parse.quote(img, safe="")}]
+    step4 = {"key": "authentification", "title": "Authentifier l'information", "ok": all(c["ok"] for c in checks), "checks": checks, "tools": tools,
+             "detail": "Aucun signal d'alerte : vérifiez tout de même les sources primaires citées." if all(c["ok"] for c in checks) else "Au moins un signal d'alerte : prudence avant de partager."}
+    steps = [step1, step2, step3, step4]
+    return {"steps": steps, "passed": sum(1 for s in steps if s["ok"]), "total": len(steps)}
+
+
+# =====================================================================
 #  3. RÉSUMÉ IA AVEC CITATIONS VÉRIFIABLES (extractif multi-sources)
 # =====================================================================
 def summarize(conn, article_id, max_sentences=4):
@@ -377,6 +507,7 @@ def compare_cluster(conn, cluster_id):
         txt = a["title"] + " " + article_text(a)
         kw_sets[a["id"]] = set(nlp.keywords(txt, 14))
     counts = Counter(k for s in kw_sets.values() for k in s)
+    reliable = reliable_count(conn, [publishers.get(a["source_id"], a["source_name"]) for a in arts])
     threshold = max(2, math.ceil(len(arts) * 0.6))
     common = [k for k, c in counts.most_common() if c >= threshold][:10]
     items = []
@@ -391,7 +522,7 @@ def compare_cluster(conn, cluster_id):
             "unique_keywords": [k for k in kw_sets[a["id"]] if counts[k] == 1][:6],
             "numbers": list(dict.fromkeys(f"{v:g}{(' ' + u) if u else ''}" for v, u in nlp.numbers(txt) if u))[:6],
             "claims": dict(st), "verification_status": a["verification_status"],
-            "verification_label": status_label(a["verification_status"], cl["source_count"], a.get("status_reason")),
+            "verification_label": status_label(a["verification_status"], cl["source_count"], a.get("status_reason"), reliable),
             "is_demo": a["is_demo"],
         })
     # Divergences chiffrées : même unité, valeurs différentes selon les médias
@@ -554,7 +685,6 @@ def decorate(conn, a, now=None):
     if a.get("cluster_id"):
         latest = db.parse(db.scalar(conn, "SELECT MAX(published_at) FROM articles WHERE cluster_id=?", (a["cluster_id"],)))
     a["freshness"] = nlp.freshness(pub, seen, now, latest)
-    a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"))
     a["reports_count"] = db.scalar(conn, "SELECT COUNT(*) FROM reports WHERE article_id=? AND status IN ('en_attente','en_cours')", (a["id"],))
     if a.get("cluster_id"):
         a["others"] = db.rows(conn, """SELECT a.id, a.title, a.url, a.published_at, s.name source_name, COALESCE(s.publisher, s.name) publisher FROM articles a
@@ -562,6 +692,8 @@ def decorate(conn, a, now=None):
                               (a["cluster_id"], a["id"]))
     else:
         a["others"] = []
+    a["reliable_sources"] = reliable_count(conn, [a.get("source_publisher") or a["source_name"]] + [o["publisher"] for o in a["others"]])
+    a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"), a["reliable_sources"])
     a.pop("content", None)
     a["summary"] = nlp.strip_html(a.get("summary") or "")[:320]
     return a

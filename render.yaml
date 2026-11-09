@@ -20,3 +20,15 @@ services:
         sync: false
       - key: PRISME_MAIL_FROM
         sync: false
+      # Firebase Authentication : e-mails de confirmation et de réinitialisation, connexion avec Google (docs/DEPLOIEMENT.md, section 5)
+      - key: PRISME_FIREBASE_API_KEY
+        sync: false
+      - key: PRISME_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: PRISME_FIREBASE_PROJECT_ID
+        sync: false
+      # Google Search Console (balise HTML) et API Google Fact Check Tools (facultative)
+      - key: PRISME_GOOGLE_SITE_VERIFICATION
+        sync: false
+      - key: GOOGLE_FACTCHECK_API_KEY
+        sync: false

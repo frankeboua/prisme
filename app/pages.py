@@ -3,6 +3,7 @@
 L'application monopage prend ensuite le relais sur les mêmes URL.
 """
 import json
+import os
 import re
 import unicodedata
 from datetime import timedelta
@@ -13,7 +14,7 @@ from . import db, editorial, engine, nlp
 TAGLINE = "L'actualité comparée, média par média"
 DEFAULT_DESC = ("Prisme réunit les articles de plusieurs médias sur un même événement, montre ce qu'ils ont en commun "
                 "et où ils divergent, et renvoie toujours vers la source originale.")
-PRIVATE = ("/veille", "/favoris", "/notifications", "/signalements", "/admin", "/parametres", "/connexion", "/recherche")
+PRIVATE = ("/veille", "/favoris", "/notifications", "/signalements", "/admin", "/parametres", "/connexion", "/recherche", "/avis")
 STATIC_PAGES = {
     "/tendances": ("Tendances : les sujets les plus couverts", "Les événements repris par le plus de médias en ce moment, et les mots-clés dominants."),
     "/digest": ("Le digest du jour", "L'essentiel de l'actualité en quelques minutes, résumé à partir de plusieurs sources citées."),
@@ -178,7 +179,11 @@ def render(conn, path, site, feed=lambda category="": {"items": []}):
 
     if path == "/methode":
         return 200, {**base, "title": "Notre méthode : ce que Prisme affirme et n'affirme pas", "desc": "Comment Prisme regroupe les articles, ce que signifient ses statuts et les limites de l'outil.",
-                     "main": "<h1>Notre méthode</h1><p>Prisme mesure la couverture d'un événement par plusieurs médias. Il ne certifie pas la véracité des faits.</p>"}
+                     "main": "<h1>Notre méthode</h1><p>Prisme mesure la couverture d'un événement par plusieurs médias. Il ne certifie pas la véracité des faits.</p>"
+                             "<h2>La vérification en quatre étapes</h2><ol><li>Vérifier la source : média, statut, pays, auteur et article original.</li>"
+                             "<li>Vérifier la crédibilité de la source : six indicateurs mesurés sur ses articles reçus.</li>"
+                             "<li>Croiser au moins trois sources fiables qui traitent le même événement.</li>"
+                             "<li>Authentifier l'information : date d'origine, écarts entre médias, signalements, outils de fact-checking.</li></ol>"}
 
     if path in STATIC_PAGES:
         t, d = STATIC_PAGES[path]
@@ -216,6 +221,9 @@ def fill_template(tpl, ctx, conn):
     if ctx["jsonld"]:
         data = json.dumps(ctx["jsonld"], ensure_ascii=False).replace("<", "\\u003c")
         meta.append(f'<script type="application/ld+json">{data}</script>')
+    verification = os.environ.get("PRISME_GOOGLE_SITE_VERIFICATION", "").strip()
+    if verification:   # balise fournie par la Google Search Console (méthode « Balise HTML »)
+        meta.append(f'<meta name="google-site-verification" content="{escape(verification, True)}">')
     return (tpl.replace("<!--TITLE-->", escape(ctx["title"])).replace("<!--META-->", "\n  ".join(meta))
             .replace("<!--MAIN-->", f'<div data-ssr="1">{ctx["main"]}</div>' if ctx["main"] else "").replace("<!--RUBRICS-->", rubrics_html(conn)))
 

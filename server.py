@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from collections import defaultdict, deque
@@ -102,6 +103,34 @@ def public_user(u):
 def verification_on():
     """En démonstration locale le code s'affiche à l'écran ; en production il faut un service d'envoi."""
     return mail.enabled() or not PUBLIC
+
+
+# Firebase Authentication : e-mails de confirmation et de réinitialisation envoyés par Google, connexion avec Google.
+# La configuration web de Firebase est publique par conception ; la sécurité repose sur le contrôle du jeton côté serveur.
+FIREBASE = {"apiKey": os.environ.get("PRISME_FIREBASE_API_KEY", "").strip(), "authDomain": os.environ.get("PRISME_FIREBASE_AUTH_DOMAIN", "").strip(),
+            "projectId": os.environ.get("PRISME_FIREBASE_PROJECT_ID", "").strip()}
+
+
+def firebase_on():
+    return all(FIREBASE.values())
+
+
+def firebase_lookup(id_token):
+    """Le jeton est contrôlé par Google : seul un jeton valide de ce projet Firebase renvoie un compte."""
+    url = "https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=" + urllib.parse.quote(FIREBASE["apiKey"])
+    req = urllib.request.Request(url, data=json.dumps({"idToken": id_token}).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": rss.UA})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            users = json.load(r).get("users") or []
+    except urllib.error.HTTPError:
+        users = []
+    except Exception:
+        traceback.print_exc()
+        raise ApiError(502, "Le service de connexion ne répond pas. Réessayez dans quelques instants.")
+    if not users:
+        raise ApiError(401, "Connexion expirée ou invalide. Reconnectez-vous.")
+    return users[0]
 
 
 def clean_email(value):
@@ -189,19 +218,56 @@ def register(req, body, user):
     if db.row(CONN, "SELECT id FROM users WHERE email=?", (email,)):
         raise ApiError(409, "Un compte existe déjà avec cet e-mail. Connectez-vous ou utilisez « Mot de passe oublié ».")
     checked = verification_on()
+    if PUBLIC and firebase_on() and not checked:
+        # L'inscription passe par Firebase, qui vérifie l'adresse : pas de compte local non vérifié en production.
+        raise ApiError(400, "Inscrivez-vous avec le formulaire « Créer un compte » : un lien de confirmation vous sera envoyé par e-mail.")
     if checked:
         _check_code(email, "register", body.get("code"))
     h, salt = seed.hash_password(body["password"])
+    return _create_account(email, display_name, h, salt, int(checked), body["country"], body.get("interests"))
+
+
+def _create_account(email, display_name, h, salt, verified, country, interests):
     uid = CONN.execute("INSERT INTO users(username, email, display_name, password_hash, salt, email_verified, country) VALUES (?,?,?,?,?,?,?)",
-                       (_new_username(email), email, display_name, h, salt, int(checked), body["country"])).lastrowid
+                       (_new_username(email), email, display_name, h, salt, verified, country)).lastrowid
     cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT * FROM categories")}
-    for slug in body.get("interests") or []:
+    for slug in interests or []:
         if slug in cats:
             CONN.execute("INSERT OR IGNORE INTO interests VALUES (?,?,1.0)", (uid, cats[slug]))
     CONN.execute("INSERT INTO notifications(user_id, kind, message) VALUES (?, 'systeme', ?)",
                  (uid, "Bienvenue sur Prisme ! Ajoutez des alertes par mots-clés pour être notifié(e)."))
     CONN.commit()
     return _open_session(uid)
+
+
+@route("POST", "/api/auth/firebase")
+def auth_firebase(req, body, user):
+    """Connexion après Firebase (e-mail confirmé ou compte Google) : le compte Prisme est créé ou retrouvé par l'adresse.
+    Les identités sont conservées par Firebase : un lecteur retrouve son compte même si la base locale a été réinitialisée."""
+    if not firebase_on():
+        raise ApiError(503, "La connexion par e-mail et avec Google n'est pas encore activée sur ce site.")
+    limit("firebase", req.ip, 30, 600)
+    token = str(body.get("id_token") or "")
+    if not 20 <= len(token) <= 4096:
+        raise ApiError(400, "Jeton de connexion invalide.")
+    info = firebase_lookup(token)          # appel réseau hors du verrou d'écriture
+    email = clean_email(info.get("email"))
+    if not info.get("emailVerified"):
+        raise ApiError(403, "Confirmez d'abord votre adresse : cliquez sur le lien reçu par e-mail, puis reconnectez-vous.")
+    return _firebase_session(email, info, body)
+
+
+@db.write
+def _firebase_session(email, info, body):
+    u = db.row(CONN, "SELECT id FROM users WHERE email=?", (email,))
+    if u:
+        CONN.execute("UPDATE users SET email_verified=1 WHERE id=?", (u["id"],))
+        CONN.commit()
+        return _open_session(u["id"])
+    name = str(body.get("display_name") or info.get("displayName") or email.split("@")[0]).strip()[:80] or "Lecteur"
+    country = body.get("country") if body.get("country") in COUNTRIES else None
+    h, salt = seed.hash_password(secrets.token_urlsafe(32))   # mot de passe local inutilisable : la connexion passe par Firebase
+    return _create_account(email, name, h, salt, 1, country, body.get("interests"))
 
 
 @route("POST", "/api/password/reset")
@@ -259,7 +325,8 @@ def demo_login(req, body, user):
 
 @route("GET", "/api/config")
 def config(req, q, user):
-    return {"demo_logins": not PUBLIC, "refresh_minutes": REFRESH_MINUTES if PUBLIC else None, "email_verification": verification_on()}
+    return {"demo_logins": not PUBLIC, "refresh_minutes": REFRESH_MINUTES if PUBLIC else None, "email_verification": verification_on() or firebase_on(),
+            "firebase": FIREBASE if firebase_on() else None}
 
 
 @route("POST", "/api/logout", "user")
@@ -334,8 +401,11 @@ def categories(req, q, user):
 def sources(req, q, user):
     items = db.rows(CONN, """SELECT s.*, c.name category_name, (SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) articles
                              FROM sources s LEFT JOIN categories c ON c.id=s.default_category ORDER BY s.is_demo, s.name""")
-    if not (user and user["role"] == "admin"):
-        for it in items:
+    cred = engine.source_credibility(CONN)
+    for it in items:
+        c = cred.get(it.get("publisher") or it["name"])
+        it["credibility"] = {k: c[k] for k in ("met", "total", "reliable", "statut", "criteria")} if c else None
+        if not (user and user["role"] == "admin"):
             it.pop("last_error", None)
     return items
 
@@ -530,6 +600,8 @@ def article(req, q, user, aid):
     out["keywords"] = nlp.keywords(a["title"] + " " + content, 8)
     out["claims"] = engine.get_verification(CONN, a["id"])
     out["source"] = db.row(CONN, "SELECT name, website, country, language, kind, reliability, certified, is_demo, reliability_note FROM sources WHERE id=?", (a["source_id"],))
+    cred = engine.source_credibility(CONN).get(a.get("source_publisher") or a["source_name"])
+    out["credibility"] = {k: cred[k] for k in ("met", "total", "reliable", "statut")} if cred else None
     out["path"] = pages.article_path(a)
     out["reports"] = db.rows(CONN, "SELECT reason, status, admin_response, created_at FROM reports WHERE article_id=? ORDER BY created_at DESC", (a["id"],))
     if user:
@@ -550,6 +622,48 @@ def summary(req, q, user, aid):
     res = engine.summarize(CONN, int(aid), min(int(qv(q, "n", 4)), 8))
     if res is None:
         raise ApiError(404, "Article introuvable.")
+    return res
+
+
+FACTCHECK_KEY = os.environ.get("GOOGLE_FACTCHECK_API_KEY", "").strip()
+_factchecks = {}
+
+
+def factchecks(query):
+    """Vérifications publiées par des rédactions de fact-checking (API Google Fact Check Tools, clé facultative)."""
+    if not FACTCHECK_KEY:
+        return None
+    if query in _factchecks:
+        return _factchecks[query]
+    url = "https://factchecktools.googleapis.com/v1alpha1/claims:search?" + urllib.parse.urlencode(
+        {"query": query[:200], "languageCode": "fr", "pageSize": 5, "key": FACTCHECK_KEY})
+    found = []
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": rss.UA}), timeout=8) as r:
+            data = json.load(r)
+        for c in data.get("claims", [])[:5]:
+            rev = (c.get("claimReview") or [{}])[0]
+            if http_ok(rev.get("url")):
+                found.append({"claim": c.get("text", "")[:300], "claimant": c.get("claimant"), "rating": rev.get("textualRating"),
+                              "publisher": (rev.get("publisher") or {}).get("name"), "url": rev["url"], "date": rev.get("reviewDate")})
+    except Exception:
+        traceback.print_exc()
+        return []
+    if len(_factchecks) > 500:
+        _factchecks.clear()
+    _factchecks[query] = found
+    return found
+
+
+def http_ok(u):
+    return isinstance(u, str) and u.lower().startswith(("http://", "https://"))
+
+
+@route("GET", r"/api/articles/(\d+)/check")
+def check_article(req, q, user, aid):
+    a = engine.decorate(CONN, dict(_article(aid)))
+    res = engine.check_article(CONN, a)
+    res["factchecks"] = factchecks(a["title"])
     return res
 
 
@@ -828,6 +942,29 @@ def export(req, q, user):
     return ("text/plain", "\n".join(lines), "prisme_export.txt")
 
 
+# Questionnaire SUS : les affirmations impaires sont positives, les paires négatives (Brooke, 1986).
+@route("POST", "/api/feedback")
+@db.write
+def feedback(req, body, user):
+    limit("feedback", req.ip, 5, 600)
+    answers = body.get("answers")
+    if not isinstance(answers, list) or len(answers) != 10 or not all(isinstance(x, int) and 1 <= x <= 5 for x in answers):
+        raise ApiError(400, "Répondez aux dix affirmations, chacune de 1 à 5.")
+    sus = 2.5 * sum((x - 1) if i % 2 == 0 else (5 - x) for i, x in enumerate(answers))
+    CONN.execute("INSERT INTO feedback(user_id, answers, sus, profile, comment) VALUES (?,?,?,?,?)",
+                 (user["id"] if user else None, ",".join(map(str, answers)), sus, str(body.get("profile") or "")[:60] or None,
+                  str(body.get("comment") or "").strip()[:1000] or None))
+    CONN.commit()
+    return {"sus": sus}
+
+
+@route("GET", "/api/feedback", "admin")
+def feedback_summary(req, q, user):
+    rows = db.rows(CONN, "SELECT sus, profile, comment, created_at FROM feedback ORDER BY created_at DESC")
+    return {"count": len(rows), "average": round(sum(r["sus"] for r in rows) / len(rows), 1) if rows else None, "target": 85,
+            "comments": [r for r in rows if r["comment"]][:20]}
+
+
 @route("GET", "/api/stats")
 def stats(req, q, user):
     s = lambda sql, p=(): db.scalar(CONN, sql, p)
@@ -862,6 +999,7 @@ def _refresh_job():
     REFRESH["running"] = True
     try:
         REFRESH["last"] = rss.refresh_all(CONN)
+        engine.reset_credibility()
         _anon_cache.clear()
         _vocabulary.clear()
         images.warm(CONN)
@@ -955,9 +1093,18 @@ class Request:
         self.headers, self.ip, self.token = headers, ip, None
 
 
+def _csp():
+    script, connect, frame = "'self'", "'self' https://api.mymemory.translated.net", "'self'"
+    if firebase_on():   # SDK Firebase, échanges avec Google et fenêtre de connexion Google
+        script += " https://www.gstatic.com https://apis.google.com"
+        connect += " https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com"
+        frame = f"https://{FIREBASE['authDomain']} https://accounts.google.com"
+    return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' https: http:; "
+            f"connect-src {connect}; frame-src {frame}; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+
 SECURITY_HEADERS = [
-    ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; "
-                                "media-src 'self' https: http:; connect-src 'self' https://api.mymemory.translated.net; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+    ("Content-Security-Policy", _csp()),
     ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"), ("Referrer-Policy", "strict-origin-when-cross-origin"),
     ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
 ]
@@ -1209,6 +1356,14 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v5'"):
+        # Médias ivoiriens ajoutés en novembre 2026 : insérés une fois, un flux supprimé par l'administrateur ne revient pas.
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                            VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v5', '1')")
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v4'"):
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
         CONN.execute("UPDATE sources SET publisher=NULL WHERE is_demo=0")

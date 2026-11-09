@@ -35,7 +35,10 @@ Avant une présentation, ouvrir le site 2 à 3 minutes à l'avance. Pour conserv
 | `PRISME_REFRESH_MINUTES` | Intervalle de collecte des flux (30 par défaut) |
 | `PRISME_SITE_URL` | Adresse publique, utile avec un domaine personnalisé (les adresses Railway et Render sont détectées seules) |
 | `RAILWAY_RUN_UID=0` | Sur Railway : permet d'écrire sur le volume |
-| `BREVO_API_KEY`, `PRISME_MAIL_FROM` | Envoi des codes de vérification (section 5) |
+| `PRISME_FIREBASE_API_KEY`, `PRISME_FIREBASE_AUTH_DOMAIN`, `PRISME_FIREBASE_PROJECT_ID` | Firebase Authentication : e-mails de confirmation et de réinitialisation, connexion avec Google (section 5). Ces valeurs sont publiques par conception |
+| `PRISME_GOOGLE_SITE_VERIFICATION` | Jeton de la balise HTML fournie par la Google Search Console (section 7) |
+| `GOOGLE_FACTCHECK_API_KEY` | Facultatif : affiche dans « Vérifier en 4 étapes » les vérifications publiées par des fact-checkeurs (section 7 bis) |
+| `BREVO_API_KEY`, `PRISME_MAIL_FROM` | Solution de repli : envoi des codes de vérification par Brevo (section 5 bis) |
 
 ## 3. Pour migrer vers Railway plus tard
 
@@ -56,9 +59,29 @@ Identifiant : `redaction`. Le mot de passe se change dans Render : service *pris
 
 Pour recréer le service : *New > Blueprint*, choisir le dépôt (le fichier `render.yaml` est lu automatiquement) et renseigner `PRISME_ADMIN_PASSWORD`.
 
-## 5. Activer la vérification des e-mails
+## 5. Activer les e-mails et la connexion avec Google (Firebase)
 
-Sans service d'envoi, le site public crée les comptes **sans vérifier l'adresse**. L'offre gratuite de Render bloque l'envoi d'e-mails classique (ports 25, 465 et 587) : Prisme passe donc par l'API HTTPS de Brevo.
+Firebase Authentication est gratuit (offre Spark) et envoie lui-même les e-mails : aucun serveur d'envoi n'est nécessaire, ce qui contourne le blocage des ports d'e-mail par Render. Les comptes sont conservés par Firebase : un lecteur retrouve son compte même quand la base gratuite de Render est effacée.
+
+1. Sur [console.firebase.google.com](https://console.firebase.google.com), créer un projet (Google Analytics n'est pas nécessaire).
+2. *Authentication > Commencer > Mode de connexion* : activer **Adresse e-mail/Mot de passe** et **Google** (renseigner l'adresse d'assistance demandée).
+3. *Authentication > Paramètres > Domaines autorisés* : ajouter `prisme-srbh.onrender.com` (et le futur nom de domaine).
+4. *Authentication > Modèles* : choisir la langue **français** et le nom d'expéditeur « Prisme ».
+5. *Paramètres du projet > Vos applications > Web (</>)* : enregistrer une application, puis copier `apiKey`, `authDomain` et `projectId`.
+6. Dans Render, service *prisme* > *Environment*, ajouter `PRISME_FIREBASE_API_KEY`, `PRISME_FIREBASE_AUTH_DOMAIN` et `PRISME_FIREBASE_PROJECT_ID`, puis enregistrer : le site redémarre.
+
+Ce qui se passe ensuite :
+
+- **Inscription :** nom, e-mail, pays et mot de passe. Firebase envoie un lien de confirmation ; le compte Prisme n'est ouvert qu'après le clic sur ce lien.
+- **Connexion avec Google :** un clic, sans mot de passe à créer.
+- **Mot de passe oublié :** Firebase envoie un lien pour en choisir un nouveau. Prisme n'envoie jamais de mot de passe.
+- **Sécurité :** le serveur ne croit pas le navigateur sur parole. Il fait contrôler chaque jeton par Google (`accounts:lookup`) et refuse une adresse non confirmée. Le compte administrateur reste un compte local (`redaction`).
+
+Contrôle : la page *Connexion* affiche « Continuer avec Google ». Les messages de Firebase arrivent parfois dans les indésirables au début.
+
+## 5 bis. Solution de repli : codes envoyés par Brevo
+
+Sans Firebase ni Brevo, le site public crée les comptes **sans vérifier l'adresse**. L'offre gratuite de Render bloque l'envoi d'e-mails classique (ports 25, 465 et 587) : cette solution passe donc par l'API HTTPS de Brevo.
 
 1. Créer un compte sur [brevo.com](https://www.brevo.com) et y valider l'adresse d'expéditeur.
 2. Créer une clé API dans Brevo (*SMTP & API > API Keys*).
@@ -86,10 +109,14 @@ Un expéditeur en `@gmail.com` peut arriver dans les indésirables : un domaine 
 Un site déployé n'est pas pour autant référencé. L'indexation prend de quelques jours à plusieurs semaines et n'est pas garantie. Une adresse `*.onrender.com` fonctionne, mais un domaine à vous est préférable.
 
 1. Sur [search.google.com/search-console](https://search.google.com/search-console), ajouter la propriété en mode **Préfixe de l'URL** (ou **Domaine** avec un nom de domaine à vous).
-2. Vérifier la propriété. Avec l'adresse Render : méthode **balise HTML**, puis ajouter la balise dans `web/index.html` et redéployer. Avec un domaine : enregistrement DNS TXT.
+2. Vérifier la propriété. Avec l'adresse Render : méthode **balise HTML**. Copier seulement la valeur de `content="..."` dans la variable `PRISME_GOOGLE_SITE_VERIFICATION` de Render, attendre le redémarrage, puis cliquer sur *Valider*. Avec un domaine : enregistrement DNS TXT.
 3. Soumettre le sitemap : `https://prisme-srbh.onrender.com/sitemap.xml`.
 4. Dans *Inspection de l'URL*, demander l'indexation de l'accueil et de 2 ou 3 pages `/sujet/…`.
 5. Après 1 à 2 semaines, consulter *Pages* (erreurs d'indexation) et *Performances* (impressions, clics, requêtes).
+
+### 7 bis. API Google Fact Check (facultatif)
+
+Dans [console.cloud.google.com](https://console.cloud.google.com), activer **Fact Check Tools API**, créer une clé d'API (restreinte à cette API), puis la placer dans `GOOGLE_FACTCHECK_API_KEY` sur Render. L'étape « Authentifier l'information » affiche alors les vérifications déjà publiées par des rédactions de fact-checking. Sans clé, elle propose des liens de recherche.
 
 ### Choix SEO appliqués
 

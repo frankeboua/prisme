@@ -35,6 +35,12 @@ REAL_SOURCES = [
     ("RTI Info", "https://www.rti.info", "https://www.rti.info/feed", "Côte d'Ivoire", "fr", "tv", "societe", 70, 0),
     ("Connectionivoirienne", "https://www.connectionivoirienne.net", "https://www.connectionivoirienne.net/feed/", "Côte d'Ivoire", "fr", "web", "politique", 70, 0),
     ("L'Équipe", "https://www.lequipe.fr", "https://dwh.lequipe.fr/api/edito/rss?path=/Football/", "France", "fr", "presse", "sport", 70, 0),
+    ("Linfodrome", "https://www.linfodrome.com", "https://www.linfodrome.com/rss", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("L'Intelligent d'Abidjan", "https://www.lintelligentdabidjan.info", "https://lintelligentdabidjan.info/news/feed/", "Côte d'Ivoire", "fr", "presse", None, 70, 0),
+    ("Le Banco.net", "https://www.lebanco.net", "https://www.lebanco.net/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Yeclo", "https://www.yeclo.com", "https://www.yeclo.com/rss/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Ivoire Matin", "https://www.ivoirematin.com", "https://www.ivoirematin.com/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Abidjan TV", "https://abidjantv.net", "https://abidjantv.net/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
     # Flux par rubrique des mêmes médias : plus d'articles à trouver, comptés comme un seul média par éditeur.
     ("France 24 Culture", "https://www.france24.com", "https://www.france24.com/fr/culture/rss", "France", "fr", "tv", "culture", 70, 0),
     ("France 24 Économie", "https://www.france24.com", "https://www.france24.com/fr/%C3%A9co-tech/rss", "France", "fr", "tv", "economie", 70, 0),
@@ -55,6 +61,30 @@ REAL_SOURCES = [
     ("BBC Sport", "https://www.bbc.com/sport", "https://feeds.bbci.co.uk/sport/rss.xml", "Royaume-Uni", "en", "tv", "sport", 70, 0),
     ("Radio France — Le Cours de l'histoire", "https://www.radiofrance.fr", "https://radiofrance-podcast.net/podcast09/rss_10076.xml", "France", "fr", "podcast", "culture", 85, 1),
 ]
+
+# Statut éditorial des médias réels (faits publics, sans jugement) : affiché sur la fiche « Vérifier la source ».
+SOURCE_PROFILES = {
+    "France 24": "Chaîne publique d'information internationale (France Médias Monde)",
+    "RFI": "Radio publique internationale (France Médias Monde)",
+    "BBC": "Service public audiovisuel britannique",
+    "Le Monde": "Quotidien national français",
+    "Jeune Afrique": "Magazine panafricain",
+    "Franceinfo": "Service public d'information français",
+    "Al Jazeera English": "Chaîne internationale financée par l'État du Qatar",
+    "01net": "Site spécialisé en technologie",
+    "Numerama": "Site spécialisé en technologie",
+    "AIP (Agence ivoirienne de presse)": "Agence de presse publique ivoirienne",
+    "RTI Info": "Média audiovisuel public ivoirien",
+    "Connectionivoirienne": "Site d'information ivoirien",
+    "L'Équipe": "Quotidien sportif français",
+    "Radio France": "Radio publique française",
+    "Linfodrome": "Site d'information ivoirien",
+    "L'Intelligent d'Abidjan": "Quotidien ivoirien",
+    "Le Banco.net": "Site d'information ivoirien",
+    "Yeclo": "Site d'information ivoirien",
+    "Ivoire Matin": "Site d'information ivoirien",
+    "Abidjan TV": "Site d'information ivoirien",
+}
 
 DEMO_NOTE = "Source fictive créée pour la démonstration pédagogique (aucun lien avec un média réel)."
 DEMO_SOURCES = {
