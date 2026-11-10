@@ -603,7 +603,7 @@ def article(req, q, user, aid):
     out["tone"] = nlp.tone(a["title"] + " " + content)
     out["keywords"] = nlp.keywords(a["title"] + " " + content, 8)
     out["claims"] = engine.get_verification(CONN, a["id"])
-    out["source"] = db.row(CONN, "SELECT name, website, country, language, kind, reliability, certified, is_demo, reliability_note FROM sources WHERE id=?", (a["source_id"],))
+    out["source"] = db.row(CONN, "SELECT id, name, COALESCE(publisher, name) publisher, website, country, language, kind, reliability, certified, is_demo, reliability_note FROM sources WHERE id=?", (a["source_id"],))
     cred = engine.source_credibility(CONN).get(a.get("source_publisher") or a["source_name"])
     out["credibility"] = {k: cred[k] for k in ("met", "total", "reliable", "statut")} if cred else None
     out["path"] = pages.article_path(a)
@@ -817,6 +817,46 @@ def read_notifications(req, body, user):
         CONN.execute("UPDATE notifications SET is_read=1 WHERE user_id=?", (user["id"],))
     CONN.commit()
     return {"ok": True}
+
+
+# Abonnements aux médias : un abonnement porte sur l'éditeur, donc sur tous ses flux (Le Monde Afrique + Le Monde à la une).
+def _publisher_of(source_id):
+    r = db.row(CONN, "SELECT COALESCE(publisher, name) pub FROM sources WHERE id=?", (int(source_id),))
+    if not r:
+        raise ApiError(404, "Média introuvable.")
+    return r["pub"]
+
+
+@route("GET", "/api/subscriptions", "user")
+def subscriptions(req, q, user):
+    return db.rows(CONN, """SELECT sub.publisher, sub.created_at, MIN(s.id) source_id, MAX(s.kind) kind, MAX(s.country) country,
+                                   (SELECT COUNT(*) FROM articles a JOIN sources x ON x.id=a.source_id
+                                     WHERE COALESCE(x.publisher, x.name)=sub.publisher AND a.first_seen_at>=?) last_week,
+                                   (SELECT MAX(a.published_at) FROM articles a JOIN sources x ON x.id=a.source_id
+                                     WHERE COALESCE(x.publisher, x.name)=sub.publisher) last_published
+                            FROM subscriptions sub JOIN sources s ON COALESCE(s.publisher, s.name)=sub.publisher
+                            WHERE sub.user_id=? GROUP BY sub.publisher ORDER BY sub.publisher""", (db.ago(days=7), user["id"]))
+
+
+@route("POST", "/api/subscriptions", "user")
+@db.write
+def subscribe(req, body, user):
+    need(body, "source_id")
+    pub = _publisher_of(body["source_id"])
+    if db.scalar(CONN, "SELECT COUNT(*) FROM subscriptions WHERE user_id=?", (user["id"],)) >= 100:
+        raise ApiError(400, "Vous suivez déjà 100 médias : désabonnez-vous d'un média avant d'en ajouter un autre.")
+    CONN.execute("INSERT OR IGNORE INTO subscriptions(user_id, publisher, created_at) VALUES (?,?,?)", (user["id"], pub, db.now_str()))
+    CONN.commit()
+    return {"publisher": pub, "subscribed": True}
+
+
+@route("DELETE", r"/api/subscriptions/(\d+)", "user")
+@db.write
+def unsubscribe(req, q, user, sid):
+    pub = _publisher_of(sid)
+    CONN.execute("DELETE FROM subscriptions WHERE user_id=? AND publisher=?", (user["id"], pub))
+    CONN.commit()
+    return {"publisher": pub, "subscribed": False}
 
 
 @route("GET", "/api/interests", "user")

@@ -197,11 +197,20 @@ CREATE TABLE IF NOT EXISTS alerts (
     UNIQUE (user_id, keyword)
 );
 
+-- Abonnement d'un utilisateur à un média (éditeur) : notification à chaque nouvel article collecté.
+CREATE TABLE IF NOT EXISTS subscriptions (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    publisher   TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, publisher)
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     article_id  INTEGER REFERENCES articles(id) ON DELETE CASCADE,
-    kind        TEXT    NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest')),
+    kind        TEXT    NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement')),
     message     TEXT    NOT NULL,
     is_read     INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),

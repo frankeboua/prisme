@@ -75,6 +75,18 @@ def migrate(conn):
     if "publisher" not in {r[1] for r in conn.execute("PRAGMA table_info(sources)")}:
         conn.execute("ALTER TABLE sources ADD COLUMN publisher TEXT")
     fill_publishers(conn)
+    notif_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").fetchone()[0]
+    if "'abonnement'" not in notif_sql:
+        # SQLite ne modifie pas une contrainte CHECK : la table est recréée à l'identique, avec le type « abonnement ».
+        conn.execute("ALTER TABLE notifications RENAME TO notifications_old")
+        conn.execute("""CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement')),
+            message TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (user_id, article_id, kind))""")
+        conn.execute("INSERT INTO notifications SELECT id, user_id, article_id, kind, message, is_read, created_at FROM notifications_old")
+        conn.execute("DROP TABLE notifications_old")
     if not conn.execute("SELECT 1 FROM meta WHERE key='neutral_sources'").fetchone():
         # Plus de note ni de badge « certifiée » attribués à de vrais médias.
         conn.execute("UPDATE sources SET reliability=70, certified=0, reliability_note=NULL WHERE is_demo=0")

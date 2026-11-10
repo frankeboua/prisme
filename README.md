@@ -57,6 +57,7 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 | Ensuite | **Comparaison des sources** : vocabulaire commun, divergences chiffrées, ton, angle, chronologie | Bouton *Comparer* |
 | Ensuite | **Signalement d'erreurs** + modération + correction publiée + notification du lecteur + journal des modifications | Drapeau, *Signalements*, *Administration* |
 | Ensuite | **Notifications personnalisées** par mots-clés (+ notifications du navigateur) | Cloche, *Veille & alertes* |
+| Ensuite | **Abonnements aux médias** : notification à chaque nouvel article d'un média suivi (tous ses flux) | Bouton « S'abonner » (article, *Médias suivis*), *Veille & alertes* |
 | Ensuite | **Personnalisation sans enfermement** : quota « Découverte », indice de diversité | Fil *Pour vous*, *Paramètres* |
 | Ensuite | **Transparence des recommandations** : « Pourquoi cet article ? » (6 critères pondérés) | Bouton (?) sur chaque carte |
 | Ensuite | **Traduction** (46 langues) et **simplification** (glossaire, indice de lisibilité) | Onglets de la page article |

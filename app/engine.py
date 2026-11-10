@@ -725,6 +725,23 @@ def check_alerts(conn, days=7):
     return created
 
 
+def notify_subscribers(conn, since):
+    """Prévient chaque abonné d'un média des articles de ce média collectés depuis « since »
+    (jamais d'articles antérieurs à l'abonnement)."""
+    rows = conn.execute("""SELECT sub.user_id, a.id, a.title, COALESCE(s.publisher, s.name) pub
+                           FROM articles a JOIN sources s ON s.id=a.source_id
+                           JOIN subscriptions sub ON sub.publisher=COALESCE(s.publisher, s.name)
+                           WHERE a.first_seen_at>=? AND a.first_seen_at>=sub.created_at
+                           ORDER BY a.published_at""", (since,)).fetchall()
+    created = 0
+    for uid, aid, title, pub in rows:
+        cur = conn.execute("INSERT OR IGNORE INTO notifications(user_id, article_id, kind, message) VALUES (?,?,'abonnement',?)",
+                           (uid, aid, f"{pub} vient de publier : {title}"[:400]))
+        created += cur.rowcount
+    conn.commit()
+    return created
+
+
 def trends(conn, hours=48):
     since = db.ago(hours=hours)
     arts = db.rows(conn, "SELECT a.title, a.summary, COALESCE(s.publisher, s.name) source_id FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.published_at>=?", (since,))

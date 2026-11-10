@@ -727,6 +727,66 @@ class FirebaseEtSearchConsole(unittest.TestCase):
         self.assertNotIn("google-site-verification", call(server, "GET", "/methode")[2])
 
 
+class AbonnementsMedias(unittest.TestCase):
+    def setUp(self):
+        server._hits.clear()
+
+    def test_subscribe_notify_and_unsubscribe(self):
+        tok = new_user("abonne")
+        # Deux flux du même éditeur : l'abonnement à l'un couvre l'autre.
+        feeds = db.rows(CONN, "SELECT id, COALESCE(publisher, name) pub FROM sources WHERE publisher='Le Monde' ORDER BY id")
+        self.assertGreaterEqual(len(feeds), 2)
+        old = add_article(feeds[0]["id"], "avant-abo", "Article publié avant l'abonnement", TEXT, 1, url="https://exemple.org/avant")
+        with db._lock:
+            CONN.execute("UPDATE articles SET first_seen_at=? WHERE id=?", (db.ago(hours=1), old))
+            CONN.commit()
+        st, _, r = call(server, "POST", "/api/subscriptions", {"source_id": feeds[1]["id"]}, tok)
+        self.assertEqual((st, r["publisher"]), (200, "Le Monde"))
+        self.assertEqual(call(server, "POST", "/api/subscriptions", {"source_id": 999999}, tok)[0], 404)
+        self.assertEqual(call(server, "POST", "/api/subscriptions", {"source_id": feeds[0]["id"]})[0], 401)
+        subs = call(server, "GET", "/api/subscriptions", None, tok)[2]
+        self.assertEqual([s["publisher"] for s in subs], ["Le Monde"])
+
+        since = db.now_str()
+        new = add_article(feeds[0]["id"], "apres-abo", "Le Monde publie un nouvel article", TEXT, 0, url="https://exemple.org/apres")
+        other = add_article(src[0], "autre-media", "Un autre média publie", TEXT, 0, url="https://exemple.org/autre")
+        with db._lock:
+            n = engine.notify_subscribers(CONN, db.ago(hours=2))
+            self.assertEqual(engine.notify_subscribers(CONN, since), 0)   # pas de doublon
+        notifs = [x for x in call(server, "GET", "/api/notifications", None, tok)[2] if x["kind"] == "abonnement"]
+        ids = {x["article_id"] for x in notifs}
+        self.assertEqual(n, 1)
+        self.assertIn(new, ids)
+        self.assertNotIn(old, ids)      # rien d'antérieur à l'abonnement
+        self.assertNotIn(other, ids)
+        self.assertTrue(notifs[0]["message"].startswith("Le Monde vient de publier"))
+
+        self.assertEqual(call(server, "DELETE", f"/api/subscriptions/{feeds[0]['id']}", None, tok)[2]["subscribed"], False)
+        self.assertEqual(call(server, "GET", "/api/subscriptions", None, tok)[2], [])
+
+    def test_article_source_exposes_publisher(self):
+        a = call(server, "GET", f"/api/articles/{A1}")[2]
+        self.assertIn("publisher", a["source"])
+        self.assertTrue(a["source"]["id"])
+
+    def test_old_notifications_table_is_migrated(self):
+        import sqlite3
+        c = sqlite3.connect(":memory:")
+        c.executescript("""CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE users(id INTEGER PRIMARY KEY, email_verified INTEGER, font_family TEXT, country TEXT);
+            CREATE TABLE articles(id INTEGER PRIMARY KEY, status_reason TEXT);
+            CREATE TABLE sources(id INTEGER PRIMARY KEY, name TEXT, publisher TEXT);
+            CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, article_id INTEGER,
+              kind TEXT NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest')),
+              message TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE (user_id, article_id, kind));
+            INSERT INTO meta VALUES ('neutral_sources', '1');
+            INSERT INTO notifications(user_id, kind, message) VALUES (1, 'systeme', 'Bienvenue');""")
+        db.migrate(c)
+        c.execute("INSERT INTO notifications(user_id, article_id, kind, message) VALUES (1, 5, 'abonnement', 'x')")
+        self.assertEqual(c.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 2)
+
+
 class TestsUtilisateurs(unittest.TestCase):
     def setUp(self):
         server._hits.clear()

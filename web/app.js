@@ -4,7 +4,7 @@
 // ====================================================================
 //  État global, API et utilitaires
 // ====================================================================
-const S = { user: null, token: null, cats: [], unread: 0, favs: new Set(), feedMode: "pour_vous", feedCat: "", feedMedia: "", lastUnread: null };
+const S = { user: null, token: null, cats: [], unread: 0, favs: new Set(), subs: new Set(), feedMode: "pour_vous", feedCat: "", feedMedia: "", lastUnread: null };
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const main = () => $("#main");
@@ -397,6 +397,7 @@ async function pageArticle(id) {
       <div class="panel">
         <h3>${ico("db")} La source</h3>
         <dl class="facts"><dt>Média</dt><dd><b>${esc(src.name)}</b></dd><dt>Type</dt><dd>${esc(src.kind)}</dd><dt>Pays</dt><dd>${esc(src.country || "Non renseigné")}</dd><dt>Langue</dt><dd>${esc((src.language || "").toUpperCase())}</dd><dt>Publié</dt><dd>${fmtDate(a.published_at)}</dd><dt>Collecté</dt><dd>${fmtDate(a.first_seen_at)}</dd></dl>
+        ${src.id && !src.is_demo ? `<div style="margin:8px 0">${subBtn(src.id, src.publisher || src.name)}</div>` : ""}
         ${a.credibility ? `<div class="small" style="margin-top:6px"><b>${esc(a.credibility.statut)}</b><br>Crédibilité : <b>${a.credibility.met}/${a.credibility.total} indicateurs</b>${a.credibility.reliable ? ` <span class="badge b-ok">source fiable</span>` : ""} · <button class="linklike" data-act="tool" data-tool="check">détail</button></div>` : ""}
         ${relBadge(src.reliability, src.certified, src.is_demo)}${src.is_demo ? `<div class="small muted" style="margin-top:8px">${esc(src.reliability_note || "")}</div>` : ""}
       </div>
@@ -702,9 +703,16 @@ async function pageMultimedia() {
 
 async function pageVeille() {
   if (!S.user) return needLogin("la veille et les alertes");
-  const [alerts, favs] = await Promise.all([get("/api/alerts"), get("/api/favorites")]);
+  const [alerts, favs, subs] = await Promise.all([get("/api/alerts"), get("/api/favorites"), get("/api/subscriptions")]);
+  S.subs = new Set(subs.map((x) => x.publisher));
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("eye")} Veille & alertes</h1><p class="lead">Suivez des mots-clés : à chaque collecte, Prisme vous notifie des nouveaux articles correspondants. Organisez vos lectures dans des dossiers de veille.</p></div></div>
+    <div class="page-head"><div><h1>${ico("eye")} Veille & alertes</h1><p class="lead">Abonnez-vous à vos médias et suivez des mots-clés : à chaque collecte, Prisme vous notifie des nouveaux articles correspondants. Organisez vos lectures dans des dossiers de veille.</p></div></div>
+    <div class="panel" style="margin-bottom:16px">
+      <div class="row between"><h2 style="margin:0">${ico("bell")} Mes abonnements aux médias</h2><a class="btn sm" href="/sources">${ico("plus")} Trouver des médias</a></div>
+      <p class="small muted">À chaque collecte (toutes les ${S.config?.refresh_minutes || 30} minutes environ), Prisme vous notifie des nouveaux articles des médias que vous suivez.</p>
+      <div>${subs.map((m) => `<div class="switch"><div><b>${esc(m.publisher)}</b><div class="small muted">${[m.kind, m.country].filter(Boolean).map(esc).join(" · ")} · ${m.last_week} article(s) cette semaine${m.last_published ? ` · dernier : ${fmtDate(m.last_published)}` : ""}</div></div>
+        <div class="row">${subBtn(m.source_id, m.publisher)}</div></div>`).join("") || `<p class="muted">Vous ne suivez aucun média. Ouvrez <a href="/sources">la liste des médias</a> ou un article, puis cliquez sur « S'abonner ».</p>`}</div>
+    </div>
     <div class="grid g2">
       <div class="panel">
         <h2>${ico("bell")} Alertes par mots-clés</h2>
@@ -739,9 +747,9 @@ async function pageFavorites(params) {
 async function pageNotifications() {
   if (!S.user) return needLogin("les notifications");
   const n = await get("/api/notifications");
-  const KIND = { alerte: ["bell", "Alerte"], signalement: ["flag", "Signalement"], systeme: ["info", "Système"], digest: ["digest", "Digest"] };
+  const KIND = { alerte: ["bell", "Alerte"], signalement: ["flag", "Signalement"], systeme: ["info", "Système"], digest: ["digest", "Digest"], abonnement: ["eye", "Abonnement"] };
   main().innerHTML = `
-    <div class="page-head"><div><h1>${ico("bell")} Notifications</h1><p class="lead">Alertes personnalisées par mots-clés, suivi de vos signalements et messages de la plateforme.</p></div>
+    <div class="page-head"><div><h1>${ico("bell")} Notifications</h1><p class="lead">Nouveaux articles de vos médias, alertes par mots-clés, suivi de vos signalements et messages de la plateforme.</p></div>
       <div class="row"><button class="btn" data-act="pushperm">${ico("bell")} Activer les notifications du navigateur</button><button class="btn primary" data-act="readall">${ico("check")} Tout marquer comme lu</button></div></div>
     <div class="panel" style="padding:6px 18px">${n.map((x) => `<div class="switch" style="${x.is_read ? "opacity:.65" : ""}">
       <div class="row" style="flex-wrap:nowrap;align-items:flex-start"><span class="badge ${x.is_read ? "" : "b-info"}">${ico(KIND[x.kind][0])}${KIND[x.kind][1]}</span>
@@ -785,10 +793,10 @@ async function pageSources() {
   const list = await get("/api/sources");
   const admin = S.user && S.user.role === "admin";
   main().innerHTML = `
-    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias, parfois plusieurs par rubrique pour un même média, et renvoie toujours vers l'article original. Il ne donne pas de note subjective : il affiche six indicateurs vérifiables, mesurés sur les articles reçus. Un média qui en remplit au moins quatre compte comme source fiable pour le recoupement.</p></div>
+    <div class="page-head"><div><h1>Les médias suivis</h1><p class="lead">Prisme lit les flux RSS publics de ces médias, parfois plusieurs par rubrique pour un même média, et renvoie toujours vers l'article original. Abonnez-vous à un média pour être notifié(e) de chacun de ses nouveaux articles. Il ne donne pas de note subjective : il affiche six indicateurs vérifiables, mesurés sur les articles reçus. Un média qui en remplit au moins quatre compte comme source fiable pour le recoupement.</p></div>
       ${admin ? `<button class="btn primary" data-act="addsource">${ico("plus")} Ajouter un flux RSS</button>` : ""}</div>
     <div class="panel table-wrap" style="padding:0"><table class="t">
-      <thead><tr><th>Média</th><th>Type</th><th>Crédibilité</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
+      <thead><tr><th>Média</th><th>Type</th><th>Crédibilité</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th><th>Notifications</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
       <tbody>${list.map((s) => `<tr style="${s.active ? "" : "opacity:.5"}">
         <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span> ${relBadge(s.reliability, s.certified, 1)}` : ""}<div class="small muted">${safeUrl(s.website) ? `<a href="${esc(safeUrl(s.website))}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note || "")}</div></td>
         <td>${esc(s.kind)}</td>
@@ -796,6 +804,7 @@ async function pageSources() {
         <td>${esc(s.country || "")}</td><td>${esc(s.language.toUpperCase())}</td>
         <td>${s.articles}</td>
         <td class="small">${s.feed_url ? (s.last_fetched_at ? fmtDate(s.last_fetched_at) : "jamais") : "—"}${s.last_error ? `<div class="small" style="color:var(--bad)" title="${esc(s.last_error)}">échec de collecte</div>` : ""}</td>
+        <td>${s.is_demo ? "—" : subBtn(s.id, s.publisher || s.name)}</td>
         ${admin ? `<td><div class="row"><label class="small row" style="gap:4px"><input type="checkbox" data-act="srcactive" data-id="${s.id}" ${s.active ? "checked" : ""}>active</label>${!s.is_demo ? `<button class="btn sm danger" data-act="srcdel" data-id="${s.id}" aria-label="Supprimer ${esc(s.name)}">${ico("trash")}</button>` : ""}</div></td>` : ""}
       </tr>`).join("")}</tbody></table></div>`;
 }
@@ -1008,7 +1017,7 @@ async function pageLogin() {
           <div id="codeBox" hidden style="margin-top:10px"><div class="alert-line info small" id="codeInfo" style="margin-bottom:10px"></div>
             <label class="f" id="codeField" ${fbOn() ? "hidden" : ""}><span>Code à 6 chiffres reçu par e-mail</span><input class="input" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label></div>
           <button class="btn primary" id="regBtn" style="width:100%;justify-content:center;margin-top:8px">${fbOn() ? "Créer mon compte" : S.config && S.config.email_verification ? "Recevoir mon code par e-mail" : "Créer mon compte"}</button></form>
-        <p class="small muted" style="margin-bottom:0">Un compte permet de suivre des mots-clés, d'enregistrer des favoris et de personnaliser le fil. Lire Prisme n'en nécessite pas.</p>
+        <p class="small muted" style="margin-bottom:0">Un compte permet de s'abonner à vos médias, de suivre des mots-clés, d'enregistrer des favoris et de personnaliser le fil. Lire Prisme n'en nécessite pas.</p>
       </div>
       ${S.config && S.config.demo_logins ? `<div class="panel">
         <h2>Profils de démonstration</h2>
@@ -1070,7 +1079,26 @@ async function onLogged(r) {
   S.token = r.token; S.user = r.user; store.set("prisme_token", r.token);
   await refreshMe(); applyPrefs(); S.feedMode = "pour_vous"; nav("/");
 }
-function logoutLocal() { S.token = null; S.user = null; S.favs = new Set(); S.unread = 0; store.del("prisme_token"); applyPrefs(); renderNav(); }
+function logoutLocal() { S.token = null; S.user = null; S.favs = new Set(); S.subs = new Set(); S.unread = 0; store.del("prisme_token"); applyPrefs(); renderNav(); }
+// Bouton « S'abonner » à un média : l'abonnement couvre tous les flux de l'éditeur.
+function subBtn(sourceId, publisher, small = true) {
+  const on = S.subs.has(publisher);
+  return `<button class="btn ${small ? "sm" : ""} ${on ? "primary" : ""}" data-act="sub" data-id="${sourceId}" data-pub="${esc(publisher)}" aria-pressed="${on}" title="${on ? `Se désabonner de ${esc(publisher)}` : `Être notifié(e) des nouveaux articles de ${esc(publisher)}`}">${ico("bell")} ${on ? "Abonné" : "S'abonner"}</button>`;
+}
+
+async function toggleSub(el) {
+  if (!S.user) { toast("Connectez-vous pour vous abonner à un média."); nav("/connexion"); return; }
+  const pub = el.dataset.pub;
+  if (S.subs.has(pub)) {
+    await del(`/api/subscriptions/${el.dataset.id}`); S.subs.delete(pub); toast(`Abonnement à ${pub} retiré.`);
+  } else {
+    await post("/api/subscriptions", { source_id: +el.dataset.id }); S.subs.add(pub);
+    toast(`Abonné(e) à ${pub} : vous serez notifié(e) de chaque nouvel article.`);
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  }
+  $$(`[data-act="sub"]`).forEach((b) => { if (b.dataset.pub === pub) b.outerHTML = subBtn(b.dataset.id, pub, b.classList.contains("sm")); });
+}
+
 function needLogin(what) {
   main().innerHTML = `<div class="panel empty">${ico("user")}<h2>Connexion requise</h2><p>Connectez-vous pour accéder à ${esc(what)}.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`;
 }
@@ -1295,6 +1323,7 @@ document.addEventListener("click", async (e) => {
         box.innerHTML = whyHtml(CARD_CACHE.get(+c.dataset.id).why); box.hidden = !box.hidden; break;
       }
       case "fav": prevent(); await toggleFav(id, el); break;
+      case "sub": prevent(); await toggleSub(el); break;
       case "share": prevent(); await openShare(id); break;
       case "report": prevent(); openReport(+id); break;
       case "play": await play(id); break;
@@ -1408,10 +1437,11 @@ async function refreshMe() {
   S.unread = r.unread; S.lastUnread = r.unread;
   if (prev !== null && r.unread > prev) {
     toast(`${r.unread - prev} nouvelle(s) notification(s).`);
-    if ("Notification" in window && Notification.permission === "granted") new Notification("Prisme", { body: `${r.unread - prev} nouvelle(s) alerte(s) d'actualité` });
+    if ("Notification" in window && Notification.permission === "granted") new Notification("Prisme", { body: `${r.unread - prev} nouvelle(s) notification(s) : nouveaux articles de vos médias et alertes` });
   }
-  const f = await get("/api/favorites").catch(() => ({ items: [] }));
+  const [f, subs] = await Promise.all([get("/api/favorites").catch(() => ({ items: [] })), get("/api/subscriptions").catch(() => [])]);
   S.favs = new Set(f.items.map((x) => x.id));
+  S.subs = new Set(subs.map((x) => x.publisher));
   renderNav();
 }
 

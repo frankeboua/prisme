@@ -168,6 +168,7 @@ def refresh_all(conn, only_id=None):
     sql = "SELECT * FROM sources WHERE active=1 AND feed_url IS NOT NULL" + (" AND id=?" if only_id else "")
     sources = db.rows(conn, sql, (only_id,) if only_id else ())
     slug_ids = {r["slug"]: r["id"] for r in db.rows(conn, "SELECT id, slug FROM categories")}
+    started = db.now_str()
     log_id = conn.execute("INSERT INTO fetch_log(message) VALUES ('collecte en cours')").lastrowid
     conn.commit()
 
@@ -193,6 +194,9 @@ def refresh_all(conn, only_id=None):
     if new:
         engine.refresh_statuses(conn)
     notified = engine.check_alerts(conn) if new else 0
+    if new:
+        with db._lock:
+            notified += engine.notify_subscribers(conn, started)
     with db._lock:
         conn.execute("UPDATE fetch_log SET finished_at=?, sources_ok=?, sources_ko=?, new_articles=?, message=? WHERE id=?",
                      (db.now_str(), ok, ko, new, f"{verified} analysés, {notified} notifications", log_id))
