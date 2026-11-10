@@ -107,8 +107,12 @@ def verification_on():
 
 # Firebase Authentication : e-mails de confirmation et de réinitialisation envoyés par Google, connexion avec Google.
 # La configuration web de Firebase est publique par conception ; la sécurité repose sur le contrôle du jeton côté serveur.
-FIREBASE = {"apiKey": os.environ.get("PRISME_FIREBASE_API_KEY", "").strip(), "authDomain": os.environ.get("PRISME_FIREBASE_AUTH_DOMAIN", "").strip(),
-            "projectId": os.environ.get("PRISME_FIREBASE_PROJECT_ID", "").strip()}
+# En production, le projet Firebase « prisme-69fdc » sert par défaut ; les variables d'environnement le remplacent.
+_FB_PROD = {"apiKey": "AIzaSyAimGPksxUEl_Q7UPhnw5eEgXyWpIlaX5w", "authDomain": "prisme-69fdc.firebaseapp.com",
+            "projectId": "prisme-69fdc"} if PUBLIC else {"apiKey": "", "authDomain": "", "projectId": ""}
+FIREBASE = {"apiKey": os.environ.get("PRISME_FIREBASE_API_KEY", _FB_PROD["apiKey"]).strip(),
+            "authDomain": os.environ.get("PRISME_FIREBASE_AUTH_DOMAIN", _FB_PROD["authDomain"]).strip(),
+            "projectId": os.environ.get("PRISME_FIREBASE_PROJECT_ID", _FB_PROD["projectId"]).strip()}
 
 
 def firebase_on():

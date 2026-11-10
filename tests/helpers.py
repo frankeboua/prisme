@@ -9,6 +9,8 @@ def setup(mode):
     os.environ["PRISME_MODE"] = mode
     os.environ["PRISME_ADMIN_USER"] = "redaction"
     os.environ["PRISME_ADMIN_PASSWORD"] = "mot-de-passe-de-test"
+    for k in ("PRISME_FIREBASE_API_KEY", "PRISME_FIREBASE_AUTH_DOMAIN", "PRISME_FIREBASE_PROJECT_ID"):
+        os.environ[k] = ""   # les tests activent Firebase eux-mêmes, avec une configuration fictive
 
 
 def call(server, method, path, body=None, token=None, ip="10.0.0.1", headers=None):
