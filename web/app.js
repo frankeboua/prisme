@@ -151,7 +151,7 @@ function navItems() {
   const admin = S.user && S.user.role === "admin";
   return [
     ["Lire"],
-    ["/", "home", "À la une"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
+    ["/", "home", "À la une"], ["/local", "globe", "Près de chez vous"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
     ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Rechercher"],
     ["Mon espace"],
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
@@ -207,7 +207,7 @@ function card(a) {
   const others = a.others || [];
   const names = [...new Set(others.map((o) => o.publisher || o.source_name))].filter((n) => n !== pubOf(a));
   const why = a.why;
-  return `<article class="card" data-id="${a.id}">
+  return `<article class="card" data-id="${a.id}" data-pub="${esc(pubOf(a))}">
     <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
     <div class="card-body">
       <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
@@ -226,6 +226,7 @@ function card(a) {
       <button class="btn ghost" data-act="fav" data-id="${a.id}" title="Ajouter aux favoris" aria-label="Ajouter aux favoris" aria-pressed="${S.favs.has(a.id)}" style="${S.favs.has(a.id) ? "color:var(--accent)" : ""}">${ico("star")}<span class="lbl">Favori</span></button>
       <button class="btn ghost" data-act="share" data-id="${a.id}" title="Partager" aria-label="Partager">${ico("share")}<span class="lbl">Partager</span></button>
       <button class="btn ghost" data-act="report" data-id="${a.id}" title="Signaler une erreur" aria-label="Signaler une erreur">${ico("flag")}<span class="lbl">Signaler</span></button>
+      ${a.is_demo ? "" : `<button class="btn ghost" data-act="hide" data-id="${a.source_id}" data-pub="${esc(pubOf(a))}" title="Ne plus voir les articles de ${esc(pubOf(a))}" aria-label="Masquer ${esc(pubOf(a))}">${ico("x")}<span class="lbl">Masquer</span></button>`}
     </div>
   </article>`;
 }
@@ -260,11 +261,11 @@ async function pageFeed() {
     ${cat ? `<div class="page-head"><div><span class="kicker">Rubrique</span><h1>${esc(cat.name)}</h1></div></div>` : `<h1 class="sr">Prisme : l'actualité comparée, média par média</h1>`}
     <div id="recall"></div>
     <div id="front">${isHome || cat ? `<div class="skeleton"></div>` : ""}</div>
-    ${!cat ? `<div id="topics"></div>` : ""}
+    ${!cat ? `<div id="topics"></div><div id="localBox"></div>` : ""}
     <div class="sec-title"><h2>${cat ? "Tous les sujets" : "Le fil"}</h2><small id="feedCount"></small></div>
     <div class="page-head" style="margin-bottom:12px">
       <div class="tabs" style="margin:0;flex:1">
-        ${[["pour_vous", "ai", S.user ? "Pour vous" : "Sélection"], ["recent", "clock", "Les plus récents"], ["tendances", "trend", "Les plus couverts"]].map(([k, i, l]) => `<button class="tab ${S.feedMode === k ? "active" : ""}" data-act="mode" data-mode="${k}" aria-pressed="${S.feedMode === k}">${ico(i)}${l}</button>`).join("")}
+        ${[["pour_vous", "ai", S.user ? "Pour vous" : "Sélection"], ["recent", "clock", "Les plus récents"], ["tendances", "trend", "Les plus couverts"], ...(S.user ? [["abonnements", "bell", "Mes médias"]] : [])].map(([k, i, l]) => `<button class="tab ${S.feedMode === k ? "active" : ""}" data-act="mode" data-mode="${k}" aria-pressed="${S.feedMode === k}">${ico(i)}${l}</button>`).join("")}
       </div>
       <label class="sr" for="mediaSel">Filtrer par format</label>
       <select class="input" id="mediaSel" style="width:auto">
@@ -304,7 +305,30 @@ function sideStory(a) {
   return `<article class="side-story"><div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
     <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>${byline(a)}${n > 1 ? `<div style="margin-top:6px"><a href="/sujet/${a.cluster_id}" style="text-decoration:none">${spectre(n)}</a></div>` : ""}</article>`;
 }
+function myCountry() { return (S.user && S.user.country) || "Côte d'Ivoire"; }
+async function loadLocalBox() {
+  const country = myCountry();
+  const d = await get(`/api/feed?mode=recent&limit=3&country=${encodeURIComponent(country)}`).catch(() => null);
+  const box = $("#localBox");
+  if (!box || !d || !d.items.length || S.feedMedia) return;
+  box.innerHTML = `<div class="sec-title"><h2>${ico("globe")} Près de chez vous : ${esc(country)}</h2><small><a href="/local?pays=${encodeURIComponent(country)}">Toute l'actualité locale</a></small></div>
+    <div class="topics">${d.items.map((a) => `<article class="topic"><div class="row" style="justify-content:space-between"><span class="kicker">${esc(a.source_name)}</span>${mediaCount(a) > 1 ? spectre(mediaCount(a)) : ""}</div>
+      <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3><div class="byline">${when(a.published_at)}</div>${mediaCount(a) > 1 ? `<a class="go" href="/sujet/${a.cluster_id}">Comparer les ${mediaCount(a)} médias</a>` : ""}</article>`).join("")}</div>`;
+}
+async function loadFactBox() {
+  const f = await get("/api/factcheck").catch(() => null);
+  const rail = $("#rail");
+  if (!f || !rail) return;
+  const el = document.createElement("div");
+  el.className = "panel";
+  el.innerHTML = `<h3>${ico("shield")} À vérifier</h3>
+    ${f.items.length ? `<p class="small muted">Événements récents où les médias ne disent pas la même chose.</p><ul class="crit">${f.items.map((x) => `<li class="ko">${ico("alert")}<span><a href="/sujet/${x.cluster_id}">${esc(x.title)}</a><br><span class="badge b-warn">${esc(x.label)}</span> <span class="small muted">${esc(x.source_name)}</span></span></li>`).join("")}</ul>`
+      : `<p class="small muted">Aucun désaccord entre médias détecté ces derniers jours.</p>`}
+    <p class="small" style="margin-bottom:0"><b>${f.verified_today}</b> sujet(s) repris par 3 médias ou plus depuis 24 h. <a href="/methode">Notre méthode</a></p>`;
+  rail.insertBefore(el, rail.children[1] || null);
+}
 async function loadHomeExtras() {
+  loadLocalBox();
   const t = await get("/api/trends").catch(() => null);
   if (!t || !$("#rail")) return;
   const multi = t.topics.filter((x) => x.source_count > 1).slice(0, 6);
@@ -316,6 +340,7 @@ async function loadHomeExtras() {
   $("#rail").innerHTML = `<div class="panel"><h3>Les mots du moment</h3><ol class="rank">${t.keywords.slice(0, 8).map((k) => `<li><a href="/recherche?q=${encodeURIComponent(k.word)}">${esc(k.word)}</a></li>`).join("")}</ol></div>
     <div class="panel"><h3>Le digest du jour</h3><p class="small muted">L'essentiel en quelques minutes, à partir de plusieurs sources citées.</p><a class="btn sm" href="/digest">${ico("digest")} Lire le digest</a></div>
     <div class="panel"><h3>Comment lire Prisme</h3><p class="small muted">Le spectre indique combien de médias couvrent un même événement. C'est une mesure de couverture, pas une preuve de véracité.</p><a class="small" href="/methode">Notre méthode</a></div>`;
+  loadFactBox();
 }
 let feedOffset = 0;
 async function loadFeed(reset) {
@@ -337,7 +362,12 @@ async function loadFeed(reset) {
       front.innerHTML = `<section class="front" aria-label="À la une">${leadStory(lead)}<div class="side-col">${rest.slice(0, 4).map(sideStory).join("")}</div></section>`;
       items = rest.slice(4);
     } else front.innerHTML = "";
-    if (!data.total) {
+    if (!data.total && S.feedMode === "abonnements") {
+      front.innerHTML = "";
+      list.innerHTML = S.subs.size
+        ? empty("Vos médias n'ont rien publié récemment. Les nouveaux articles apparaîtront ici et sous la cloche.", "bell")
+        : `<div class="empty">${ico("bell")}<h2>Aucun média suivi</h2><p>Abonnez-vous aux médias que vous aimez : leurs articles s'afficheront ici, et vous serez notifié(e) à chaque publication.</p><a class="btn primary" href="/sources">Choisir mes médias</a></div>`;
+    } else if (!data.total) {
       front.innerHTML = "";
       list.innerHTML = `<div class="empty">${ico("refresh")}<h2>Les premiers articles arrivent</h2><p>La collecte des flux est en cours. Revenez dans une minute.</p></div>`;
     } else list.innerHTML = cards(items);
@@ -701,9 +731,35 @@ async function pageMultimedia() {
   $("#mmList").innerHTML = cards(r.items);
 }
 
+let localOffset = 0;
+async function pageLocal(params) {
+  const q = new URLSearchParams(params || "");
+  const country = q.get("pays") || myCountry();
+  const countries = await get("/api/countries").catch(() => ["Côte d'Ivoire"]);
+  main().innerHTML = `
+    <div class="page-head"><div><span class="kicker">Édition locale</span><h1>${ico("globe")} Près de chez vous : ${esc(country)}</h1>
+      <p class="lead">Les articles des médias de ce pays et ceux des autres médias qui en parlent, un seul article par événement. Le bouton « Comparer » montre comment chacun le raconte.</p></div>
+      <div><label class="small" for="localSel">Pays</label><select class="input" id="localSel" style="width:auto">${countries.map((c) => `<option ${c === country ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div></div>
+    <div id="localList">${skeleton()}</div>
+    <div class="row" style="justify-content:center;margin-top:24px"><button class="btn" id="localMore" hidden>Afficher plus</button></div>`;
+  $("#localSel").onchange = (e) => nav(`/local?pays=${encodeURIComponent(e.target.value)}`);
+  localOffset = 0;
+  const load = async () => {
+    const d = await get(`/api/feed?mode=recent&limit=24&offset=${localOffset}&country=${encodeURIComponent(country)}`);
+    const list = $("#localList");
+    if (!list) return;
+    if (localOffset === 0) list.innerHTML = d.items.length ? cards(d.items) : empty(`Aucun article récent ne concerne ${country}.`, "globe");
+    else list.querySelector(".feed").insertAdjacentHTML("beforeend", d.items.map((a) => { CARD_CACHE.set(a.id, a); return card(a); }).join(""));
+    localOffset += d.items.length;
+    $("#localMore").hidden = localOffset >= d.total;
+  };
+  $("#localMore").onclick = load;
+  await load();
+}
+
 async function pageVeille() {
   if (!S.user) return needLogin("la veille et les alertes");
-  const [alerts, favs, subs] = await Promise.all([get("/api/alerts"), get("/api/favorites"), get("/api/subscriptions")]);
+  const [alerts, favs, subs, hidden] = await Promise.all([get("/api/alerts"), get("/api/favorites"), get("/api/subscriptions"), get("/api/hidden")]);
   S.subs = new Set(subs.map((x) => x.publisher));
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("eye")} Veille & alertes</h1><p class="lead">Abonnez-vous à vos médias et suivez des mots-clés : à chaque collecte, Prisme vous notifie des nouveaux articles correspondants. Organisez vos lectures dans des dossiers de veille.</p></div></div>
@@ -712,6 +768,8 @@ async function pageVeille() {
       <p class="small muted">À chaque collecte (toutes les ${S.config?.refresh_minutes || 30} minutes environ), Prisme vous notifie des nouveaux articles des médias que vous suivez.</p>
       <div>${subs.map((m) => `<div class="switch"><div><b>${esc(m.publisher)}</b><div class="small muted">${[m.kind, m.country].filter(Boolean).map(esc).join(" · ")} · ${m.last_week} article(s) cette semaine${m.last_published ? ` · dernier : ${fmtDate(m.last_published)}` : ""}</div></div>
         <div class="row">${subBtn(m.source_id, m.publisher)}</div></div>`).join("") || `<p class="muted">Vous ne suivez aucun média. Ouvrez <a href="/sources">la liste des médias</a> ou un article, puis cliquez sur « S'abonner ».</p>`}</div>
+      ${hidden.length ? `<h3 style="margin-top:16px">Médias masqués</h3><p class="small muted">Leurs articles n'apparaissent plus dans vos fils. Ils restent trouvables par la recherche.</p>
+        ${hidden.map((h) => `<div class="switch"><b>${esc(h.publisher)}</b><button class="btn sm" data-act="unhide" data-id="${h.source_id}">Réafficher</button></div>`).join("")}` : ""}
     </div>
     <div class="grid g2">
       <div class="panel">
@@ -1099,6 +1157,15 @@ async function toggleSub(el) {
   $$(`[data-act="sub"]`).forEach((b) => { if (b.dataset.pub === pub) b.outerHTML = subBtn(b.dataset.id, pub, b.classList.contains("sm")); });
 }
 
+async function hideSource(el) {
+  if (!S.user) { toast("Connectez-vous pour masquer un média."); nav("/connexion"); return; }
+  const pub = el.dataset.pub;
+  if (!confirm(`Ne plus voir les articles de ${pub} dans vos fils ? Vous pourrez le réafficher depuis « Veille et alertes ».`)) return;
+  await post("/api/hidden", { source_id: +el.dataset.id });
+  $$(".card").forEach((c) => { if (c.dataset.pub === pub) c.remove(); });
+  toast(`${pub} est masqué. Ses articles restent trouvables par la recherche.`);
+}
+
 function needLogin(what) {
   main().innerHTML = `<div class="panel empty">${ico("user")}<h2>Connexion requise</h2><p>Connectez-vous pour accéder à ${esc(what)}.</p><a class="btn primary" href="/connexion">Se connecter</a></div>`;
 }
@@ -1324,6 +1391,8 @@ document.addEventListener("click", async (e) => {
       }
       case "fav": prevent(); await toggleFav(id, el); break;
       case "sub": prevent(); await toggleSub(el); break;
+      case "hide": prevent(); await hideSource(el); break;
+      case "unhide": await del(`/api/hidden/${id}`); toast("Média réaffiché."); pageVeille(); break;
       case "share": prevent(); await openShare(id); break;
       case "report": prevent(); openReport(+id); break;
       case "play": await play(id); break;
@@ -1450,7 +1519,7 @@ const ROUTES = [
   [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
   [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
-  [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
+  [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
   [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
 async function route() {

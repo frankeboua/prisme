@@ -622,7 +622,7 @@ def explain(a, profile, now):
     return {"score": round(score * 100, 1), "components": details, "reasons": reasons, "discovery": False}
 
 
-FEED_SQL = """SELECT a.*, s.name source_name, s.reliability source_reliability, s.certified source_certified, s.kind source_kind, COALESCE(s.publisher, s.name) source_publisher,
+FEED_SQL = """SELECT a.*, s.name source_name, s.reliability source_reliability, s.certified source_certified, s.kind source_kind, COALESCE(s.publisher, s.name) source_publisher, s.country source_country,
                      c.slug category_slug, c.name category_name, c.color category_color,
                      cl.size cluster_size, cl.source_count
               FROM articles a JOIN sources s ON s.id=a.source_id
@@ -631,21 +631,80 @@ FEED_SQL = """SELECT a.*, s.name source_name, s.reliability source_reliability, 
               WHERE s.active=1 {where}"""
 
 
-def feed(conn, user, mode="pour_vous", category=None, media=None, source=None, limit=30, offset=0):
-    where, params = ["a.is_cluster_lead=1"], []
+# Édition locale : un article est « local » s'il vient d'un média du pays ou s'il nomme le pays, sa capitale ou ses habitants.
+LOCAL_TERMS = {
+    "Côte d'Ivoire": ("cote d ivoire", "ivoirien", "ivoirienne", "ivoiriens", "ivoiriennes", "abidjan", "yamoussoukro", "bouake"),
+    "Sénégal": ("senegal", "senegalais", "senegalaise", "senegalaises", "dakar"),
+    "Burkina Faso": ("burkina", "burkinabe", "burkinabes", "ouagadougou"),
+    "Mali": ("mali", "malien", "malienne", "maliens", "bamako"),
+    "Cameroun": ("cameroun", "camerounais", "camerounaise", "yaounde", "douala"),
+    "Ghana": ("ghana", "ghaneen", "ghaneens", "accra"),
+    "Guinée": ("guinee", "guineen", "guineenne", "conakry"),
+    "Togo": ("togo", "togolais", "togolaise", "lome"),
+    "Bénin": ("benin", "beninois", "beninoise", "cotonou", "porto novo"),
+    "Niger": ("niger", "nigerien", "nigerienne", "niamey"),
+    "France": ("france", "francais", "francaise", "paris"),
+}
+
+
+def local_terms(country):
+    return LOCAL_TERMS.get(country) or (db.normalize(country).strip(),)
+
+
+def is_local(a, country, terms):
+    if a.get("source_country") == country:
+        return True
+    text = " " + db.normalize(a["title"] + " " + (a.get("summary") or "")) + " "
+    return any(f" {t} " in text for t in terms)
+
+
+def hidden_publishers(conn, user):
+    if not user:
+        return set()
+    return {r[0] for r in conn.execute("SELECT publisher FROM hidden_sources WHERE user_id=?", (user["id"],))}
+
+
+def _one_per_event(arts):
+    """Garde un article par événement : l'article principal s'il est retenu, sinon le premier article retenu du groupe."""
+    best = {}
+    for a in arts:
+        key = a.get("cluster_id") or ("a", a["id"])
+        if key not in best or (a["is_cluster_lead"] and not best[key]["is_cluster_lead"]):
+            best[key] = a
+    return list(best.values())
+
+
+def feed(conn, user, mode="pour_vous", category=None, media=None, source=None, limit=30, offset=0, country=None):
+    hidden = hidden_publishers(conn, user)
+    subs = set()
+    if mode == "abonnements":
+        subs = {r[0] for r in conn.execute("SELECT publisher FROM subscriptions WHERE user_id=?", (user["id"],))} if user else set()
+    # Filtres par média (abonnements, médias masqués, édition locale) : on part de tous les articles, pas seulement
+    # des articles principaux, pour qu'un événement couvert par un média filtré reste visible par un autre média.
+    relaxed = bool(hidden or country or mode == "abonnements")
+    where, params = ([] if relaxed else ["a.is_cluster_lead=1"]), []
     if category:
         where.append("c.slug=?"); params.append(category)
     if media:
         where.append("a.media_type=?"); params.append(media)
     if source:
         where.append("a.source_id=?"); params.append(int(source))
-    sql = FEED_SQL.format(where=" AND " + " AND ".join(where)) + " ORDER BY a.published_at DESC LIMIT 600"
+    sql = FEED_SQL.format(where=(" AND " + " AND ".join(where)) if where else "") + f" ORDER BY a.published_at DESC LIMIT {2000 if relaxed else 600}"
     arts = db.rows(conn, sql, params)
+    if relaxed:
+        if mode == "abonnements":
+            arts = [a for a in arts if a["source_publisher"] in subs]
+        if hidden:
+            arts = [a for a in arts if a["source_publisher"] not in hidden]
+        if country:
+            terms = local_terms(country)
+            arts = [a for a in arts if is_local(a, country, terms)]
+        arts = _one_per_event(arts)
     now = db.now()
     profile = user_profile(conn, user["id"]) if user else None
     for a in arts:
         a["why"] = explain(a, profile if mode == "pour_vous" else None, now)
-    if mode == "recent":
+    if mode in ("recent", "abonnements"):
         arts.sort(key=lambda a: a["published_at"] or "", reverse=True)
     elif mode == "tendances":
         arts.sort(key=lambda a: ((a.get("source_count") or 1) * 10 + a["views"] / 10 + a["shares"]) * math.exp(

@@ -206,6 +206,14 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher);
 
+-- Médias masqués par un lecteur : leurs articles n'apparaissent plus dans ses fils (la recherche les montre toujours).
+CREATE TABLE IF NOT EXISTS hidden_sources (
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    publisher   TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, publisher)
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

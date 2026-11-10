@@ -787,6 +787,70 @@ class AbonnementsMedias(unittest.TestCase):
         self.assertEqual(c.execute("SELECT COUNT(*) FROM notifications").fetchone()[0], 2)
 
 
+class FonctionsActualites(unittest.TestCase):
+    """Édition locale, onglet « Mes médias », médias masqués, encadré « À vérifier »."""
+
+    def setUp(self):
+        server._hits.clear()
+        server._anon_cache.clear()
+
+    def ivorian_source(self):
+        return db.row(CONN, "SELECT id, COALESCE(publisher, name) pub FROM sources WHERE country='Côte d''Ivoire' ORDER BY id LIMIT 1")
+
+    def test_local_edition(self):
+        ci = self.ivorian_source()
+        own = add_article(ci["id"], "loc-1", "Conseil des ministres : nouvelles mesures sociales", "Le gouvernement adopte un décret.", 1, url="https://exemple.org/loc1")
+        cited = add_article(src[0], "loc-2", "Abidjan accueille un sommet régional sur l'eau", "Des délégations sont arrivées.", 1, url="https://exemple.org/loc2")
+        apostrophe = add_article(src[1], "loc-3", "La Côte d’Ivoire relève ses prévisions de récolte", "Le cacao progresse.", 1, url="https://exemple.org/loc3")
+        far = add_article(src[2], "loc-4", "Tennis : un tournoi à Madrid", "Résultats du jour.", 1, url="https://exemple.org/loc4")
+        ids = {a["id"] for a in call(server, "GET", "/api/feed?mode=recent&limit=60&country=" + urllib.parse.quote("Côte d'Ivoire"))[2]["items"]}
+        self.assertTrue({own, cited, apostrophe} <= ids)
+        self.assertNotIn(far, ids)
+        self.assertEqual(call(server, "GET", "/api/feed?country=Atlantide")[0], 400)
+        self.assertEqual(call(server, "GET", "/api/feed?mode=inconnu")[0], 400)
+        st, _, html = call(server, "GET", "/local")
+        self.assertEqual(st, 200)
+        self.assertIn("Près de chez vous", html)
+        self.assertIn("/local</loc>", call(server, "GET", "/sitemap.xml")[2])
+
+    def test_mes_medias_and_hidden_sources(self):
+        tok = new_user("lecteur-gn")
+        ci = self.ivorian_source()
+        mine = add_article(ci["id"], "gn-1", "Un article de mon média préféré", "Contenu.", 0, url="https://exemple.org/gn1")
+        call(server, "POST", "/api/subscriptions", {"source_id": ci["id"]}, tok)
+        items = call(server, "GET", "/api/feed?mode=abonnements&limit=60", None, tok)[2]["items"]
+        self.assertIn(mine, [a["id"] for a in items])
+        self.assertTrue(all(a["source_publisher"] == ci["pub"] for a in items))
+        self.assertEqual(call(server, "GET", "/api/feed?mode=abonnements")[2]["items"], [])   # sans compte : rien
+
+        before = {a["source_publisher"] for a in call(server, "GET", "/api/feed?mode=recent&limit=60", None, tok)[2]["items"]}
+        self.assertIn(ci["pub"], before)
+        self.assertEqual(call(server, "POST", "/api/hidden", {"source_id": ci["id"]}, tok)[2]["hidden"], True)
+        after = {a["source_publisher"] for a in call(server, "GET", "/api/feed?mode=recent&limit=60", None, tok)[2]["items"]}
+        self.assertNotIn(ci["pub"], after)
+        self.assertEqual([h["publisher"] for h in call(server, "GET", "/api/hidden", None, tok)[2]], [ci["pub"]])
+        # Les autres lecteurs ne sont pas concernés.
+        self.assertIn(ci["pub"], {a["source_publisher"] for a in call(server, "GET", "/api/feed?mode=recent&limit=60")[2]["items"]})
+        call(server, "DELETE", f"/api/hidden/{ci['id']}", None, tok)
+        self.assertEqual(call(server, "GET", "/api/hidden", None, tok)[2], [])
+
+    def test_hidden_lead_keeps_event_visible(self):
+        """Masquer le média de l'article principal ne fait pas disparaître l'événement couvert par d'autres."""
+        tok = new_user("lecteur-gn2")
+        lead = db.row(CONN, "SELECT a.id, a.cluster_id, a.source_id FROM articles a JOIN clusters c ON c.id=a.cluster_id WHERE a.is_cluster_lead=1 AND c.source_count>1 LIMIT 1")
+        self.assertIsNotNone(lead)
+        call(server, "POST", "/api/hidden", {"source_id": lead["source_id"]}, tok)
+        items = call(server, "GET", "/api/feed?mode=recent&limit=60", None, tok)[2]["items"]
+        same = [a for a in items if a["cluster_id"] == lead["cluster_id"]]
+        self.assertEqual(len(same), 1)
+        self.assertNotEqual(same[0]["id"], lead["id"])
+
+    def test_factcheck_box(self):
+        r = call(server, "GET", "/api/factcheck")[2]
+        self.assertIn("verified_today", r)
+        self.assertTrue(all(x["label"] for x in r["items"]))
+
+
 class TestsUtilisateurs(unittest.TestCase):
     def setUp(self):
         server._hits.clear()

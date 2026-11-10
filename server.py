@@ -471,8 +471,25 @@ def qv(q, k, default=None):
 
 @route("GET", "/api/feed")
 def feed(req, q, user):
-    return engine.feed(CONN, user, qv(q, "mode", "pour_vous"), qv(q, "category"), qv(q, "media"), qv(q, "source"),
-                       int(qv(q, "limit", 24)), int(qv(q, "offset", 0)))
+    mode = qv(q, "mode", "pour_vous")
+    if mode not in ("pour_vous", "recent", "tendances", "abonnements"):
+        raise ApiError(400, "Mode de fil inconnu.")
+    country = qv(q, "country")
+    if country and country not in COUNTRIES:
+        raise ApiError(400, "Pays inconnu.")
+    return engine.feed(CONN, user, mode, qv(q, "category"), qv(q, "media"), qv(q, "source"),
+                       min(int(qv(q, "limit", 24)), 60), int(qv(q, "offset", 0)), country=country)
+
+
+@route("GET", "/api/factcheck")
+def factcheck_box(req, q, user):
+    """Encadré « À vérifier » : événements récents où les médias divergent (chiffres, démenti)."""
+    rows = db.rows(CONN, engine.FEED_SQL.format(where=" AND a.is_cluster_lead=1 AND a.verification_status='conteste' AND a.published_at>=?")
+                   + " ORDER BY a.published_at DESC LIMIT 5", (db.ago(days=4),))
+    recoupes = db.scalar(CONN, """SELECT COUNT(*) FROM articles WHERE is_cluster_lead=1 AND verification_status='verifie' AND published_at>=?""", (db.ago(days=1),))
+    return {"items": [{"id": a["id"], "title": a["title"], "source_name": a["source_name"], "published_at": a["published_at"], "cluster_id": a["cluster_id"],
+                       "label": engine.status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"))} for a in rows],
+            "verified_today": recoupes}
 
 
 @route("GET", "/api/languages")
@@ -857,6 +874,31 @@ def unsubscribe(req, q, user, sid):
     CONN.execute("DELETE FROM subscriptions WHERE user_id=? AND publisher=?", (user["id"], pub))
     CONN.commit()
     return {"publisher": pub, "subscribed": False}
+
+
+@route("GET", "/api/hidden", "user")
+def hidden_list(req, q, user):
+    return db.rows(CONN, """SELECT h.publisher, h.created_at, MIN(s.id) source_id FROM hidden_sources h
+                            JOIN sources s ON COALESCE(s.publisher, s.name)=h.publisher WHERE h.user_id=? GROUP BY h.publisher ORDER BY h.publisher""", (user["id"],))
+
+
+@route("POST", "/api/hidden", "user")
+@db.write
+def hide_source(req, body, user):
+    need(body, "source_id")
+    pub = _publisher_of(body["source_id"])
+    CONN.execute("INSERT OR IGNORE INTO hidden_sources(user_id, publisher, created_at) VALUES (?,?,?)", (user["id"], pub, db.now_str()))
+    CONN.commit()
+    return {"publisher": pub, "hidden": True}
+
+
+@route("DELETE", r"/api/hidden/(\d+)", "user")
+@db.write
+def unhide_source(req, q, user, sid):
+    pub = _publisher_of(sid)
+    CONN.execute("DELETE FROM hidden_sources WHERE user_id=? AND publisher=?", (user["id"], pub))
+    CONN.commit()
+    return {"publisher": pub, "hidden": False}
 
 
 @route("GET", "/api/interests", "user")

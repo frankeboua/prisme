@@ -20,6 +20,7 @@ STATIC_PAGES = {
     "/digest": ("Le digest du jour", "L'essentiel de l'actualité en quelques minutes, résumé à partir de plusieurs sources citées."),
     "/multimedia": ("Podcasts et vidéos", "Les podcasts et vidéos des médias suivis par Prisme."),
     "/projet": ("Le projet Prisme", "Pourquoi Prisme existe, comment il fonctionne et qui le réalise."),
+    "/local": ("Près de chez vous : l'actualité de Côte d'Ivoire", "L'actualité ivoirienne comparée entre médias ivoiriens et internationaux, pays par pays."),
 }
 
 
@@ -233,7 +234,7 @@ def fill_template(tpl, ctx, conn):
 
 
 def sitemap(conn, site):
-    urls = [(site + "/", None), (site + "/tendances", None), (site + "/digest", None), (site + "/sources", None), (site + "/methode", None), (site + "/projet", None)]
+    urls = [(site + "/", None), (site + "/tendances", None), (site + "/digest", None), (site + "/sources", None), (site + "/methode", None), (site + "/projet", None), (site + "/local", None)]
     urls += [(f"{site}/rubrique/{c['slug']}", None) for c in db.rows(conn, "SELECT slug FROM categories")]
     # Seuls les sujets comparant plusieurs médias apportent une valeur propre.
     urls += [(site + topic_path(c["id"], c["label"]), c["last_published"]) for c in db.rows(
