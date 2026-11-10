@@ -23,6 +23,9 @@ STATIC_PAGES = {
 }
 
 
+# Jeton de la Google Search Console (propriété https://prisme-srbh.onrender.com, méthode « Balise HTML ») ; la variable d'environnement le remplace.
+SEARCH_CONSOLE_TOKEN = "Q8taO-zxJsgitjTsz8BftTkHVyx2vyCWkXKTa-xptu0"
+
 def slug(text):
     t = unicodedata.normalize("NFD", text or "").encode("ascii", "ignore").decode().lower()
     return re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:70]
@@ -221,7 +224,8 @@ def fill_template(tpl, ctx, conn):
     if ctx["jsonld"]:
         data = json.dumps(ctx["jsonld"], ensure_ascii=False).replace("<", "\\u003c")
         meta.append(f'<script type="application/ld+json">{data}</script>')
-    verification = os.environ.get("PRISME_GOOGLE_SITE_VERIFICATION", "").strip()
+    default = SEARCH_CONSOLE_TOKEN if os.environ.get("PRISME_MODE") == "public" else ""
+    verification = os.environ.get("PRISME_GOOGLE_SITE_VERIFICATION", default).strip()
     if verification:   # balise fournie par la Google Search Console (méthode « Balise HTML »)
         meta.append(f'<meta name="google-site-verification" content="{escape(verification, True)}">')
     return (tpl.replace("<!--TITLE-->", escape(ctx["title"])).replace("<!--META-->", "\n  ".join(meta))

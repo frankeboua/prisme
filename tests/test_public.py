@@ -722,7 +722,7 @@ class FirebaseEtSearchConsole(unittest.TestCase):
         try:
             html = call(server, "GET", "/")[2]
         finally:
-            del os.environ["PRISME_GOOGLE_SITE_VERIFICATION"]
+            os.environ["PRISME_GOOGLE_SITE_VERIFICATION"] = ""
         self.assertIn('<meta name="google-site-verification" content="jeton-de-test">', html)
         self.assertNotIn("google-site-verification", call(server, "GET", "/methode")[2])
 
