@@ -132,7 +132,7 @@ const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_att
 const pubOf = (a) => a.source_publisher || a.source_name;
 const VERDICT = { vrai: ["b-ok", "check"], faux: ["b-bad", "x"], trompeur: ["b-warn", "alert"], analyse: ["b-info", "shield"] };
 const checkerName = (v) => v.origin === "redaction" ? "la rédaction Prisme" : v.checker;
-const verdictBadge = (v) => v ? `<span class="badge ${VERDICT[v.verdict][0]}" title="Selon ${esc(checkerName(v))}">${ico(VERDICT[v.verdict][1])}${v.verdict === "analyse" ? "Analysé par un fact-checker" : `${esc(v.label)} selon ${esc(checkerName(v))}`}</span>` : "";
+const verdictBadge = (v) => v ? `<span class="badge ${VERDICT[v.verdict][0]}" title="Selon ${esc(checkerName(v))}">${ico(VERDICT[v.verdict][1])}${{ analyse: "Analysé par un fact-checker", faux: `Démenti par ${esc(checkerName(v))}`, trompeur: `Trompeur selon ${esc(checkerName(v))}`, vrai: `Confirmé par ${esc(checkerName(v))}` }[v.verdict]}</span>` : "";
 function verdictBox(v, admin) {
   const MEANING = { faux: "information démentie", trompeur: "information sortie de son contexte ou déformée", vrai: "information confirmée" };
   const head = v.verdict === "analyse" ? `Un fact-checker a analysé ce sujet` : `${esc(v.label.toUpperCase())} : ${MEANING[v.verdict]}`;
