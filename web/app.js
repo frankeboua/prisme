@@ -130,6 +130,17 @@ const STATUS = {
 };
 const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture observée. Prisme ne certifie pas les faits : voir Notre méthode.">${ico(i)}${esc(label || l)}</span>`; };
 const pubOf = (a) => a.source_publisher || a.source_name;
+const VERDICT = { vrai: ["b-ok", "check"], faux: ["b-bad", "x"], trompeur: ["b-warn", "alert"], analyse: ["b-info", "shield"] };
+const checkerName = (v) => v.origin === "redaction" ? "la rédaction Prisme" : v.checker;
+const verdictBadge = (v) => v ? `<span class="badge ${VERDICT[v.verdict][0]}" title="Selon ${esc(checkerName(v))}">${ico(VERDICT[v.verdict][1])}${v.verdict === "analyse" ? "Analysé par un fact-checker" : `${esc(v.label)} selon ${esc(checkerName(v))}`}</span>` : "";
+function verdictBox(v, admin) {
+  const MEANING = { faux: "information démentie", trompeur: "information sortie de son contexte ou déformée", vrai: "information confirmée" };
+  const head = v.verdict === "analyse" ? `Un fact-checker a analysé ce sujet` : `${esc(v.label.toUpperCase())} : ${MEANING[v.verdict]}`;
+  return `<div class="verdict v-${v.verdict}"><div class="verdict-head">${ico(VERDICT[v.verdict][1])}<b>${head}</b><span class="small">selon <b>${esc(checkerName(v))}</b> · ${fmtDate(v.created_at)}</span></div>
+    ${v.origin === "factcheck" ? `<p>Conclusion de ${esc(v.checker)} : « ${esc(v.claim)} »</p>${safeUrl(v.url) ? `<a class="btn sm" href="${esc(safeUrl(v.url))}" target="_blank" rel="noopener">${ico("ext")} Lire l'analyse de ${esc(v.checker)}</a>` : ""}`
+      : `<p>${esc(v.explanation)}</p>${v.sources.length ? `<div class="small"><b>Sources :</b> ${v.sources.map((u, i) => `<a href="${esc(safeUrl(u) || "#")}" target="_blank" rel="noopener">source ${i + 1}</a>`).join(" · ")}</div>` : ""}`}
+    ${admin ? `<button class="btn sm ghost" data-act="verdictdel" data-id="${v.id}" style="margin-left:8px">${ico("trash")} Retirer ce verdict</button>` : ""}</div>`;
+}
 const mediaCount = (a) => new Set([pubOf(a), ...(a.others || []).map((o) => o.publisher || o.source_name)]).size;
 const spectre = (n) => { n = Math.max(1, n || 1); return `<span class="spectre ${n === 1 ? "one" : ""}" title="${n} média${n > 1 ? "s" : ""} sur ce sujet"><span class="bars" aria-hidden="true">${"<i></i>".repeat(Math.min(n, 12))}</span>${n === 1 ? "1 média" : `${n} médias`}</span>`; };
 const freshBadge = (f) => {
@@ -151,7 +162,7 @@ function navItems() {
   const admin = S.user && S.user.role === "admin";
   return [
     ["Lire"],
-    ["/", "home", "À la une"], ["/local", "globe", "Près de chez vous"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
+    ["/", "home", "À la une"], ["/local", "globe", "Près de chez vous"], ["/verifications", "shield", "Vérification des faits"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
     ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Rechercher"],
     ["Mon espace"],
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
@@ -210,7 +221,7 @@ function card(a) {
   return `<article class="card" data-id="${a.id}" data-pub="${esc(pubOf(a))}">
     <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
     <div class="card-body">
-      <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
+      <div class="row" style="gap:6px 10px">${catBadge(a)}${verdictBadge(a.verdict)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
       <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>
       ${a.freshness && a.freshness.recirculating ? `<div class="alert-line warn small">${ico("alert")}<span>${esc(a.freshness.warning)}</span></div>` : ""}
       ${a.correction_note ? `<div class="alert-line ok small">${ico("check")}<span>Correction publiée suite à un signalement.</span></div>` : ""}
@@ -294,7 +305,7 @@ function leadStory(a) {
   const n = mediaCount(a);
   return `<article class="lead-story">
     <a class="frame" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a, true)}</a>
-    <div class="row" style="gap:6px 10px">${catBadge(a)}${freshBadge(a.freshness)}</div>
+    <div class="row" style="gap:6px 10px">${catBadge(a)}${verdictBadge(a.verdict)}${freshBadge(a.freshness)}</div>
     <h2 class="lead-title"><a href="/article/${a.id}">${esc(a.title)}</a></h2>
     <p class="sum">${esc(a.summary)}</p>
     <div class="row">${byline(a)}${a.others && a.others.length ? `<a href="/sujet/${a.cluster_id}" class="small" style="font-weight:600">${spectre(n)} Comparer</a>` : ""}</div>
@@ -321,10 +332,12 @@ async function loadFactBox() {
   if (!f || !rail) return;
   const el = document.createElement("div");
   el.className = "panel";
-  el.innerHTML = `<h3>${ico("shield")} À vérifier</h3>
+  el.innerHTML = `<h3>${ico("shield")} Vérification des faits</h3>
+    ${f.verdicts.length ? `<ul class="crit">${f.verdicts.map((v) => `<li class="${v.verdict === "vrai" ? "ok" : "ko"}">${ico(VERDICT[v.verdict][1])}<span><a href="/article/${v.article_id}">${esc(v.claim)}</a><br>${verdictBadge(v)}</span></li>`).join("")}</ul>` : ""}
+    <p class="small" style="margin:8px 0 4px"><b>À vérifier</b></p>
     ${f.items.length ? `<p class="small muted">Événements récents où les médias ne disent pas la même chose.</p><ul class="crit">${f.items.map((x) => `<li class="ko">${ico("alert")}<span><a href="/sujet/${x.cluster_id}">${esc(x.title)}</a><br><span class="badge b-warn">${esc(x.label)}</span> <span class="small muted">${esc(x.source_name)}</span></span></li>`).join("")}</ul>`
       : `<p class="small muted">Aucun désaccord entre médias détecté ces derniers jours.</p>`}
-    <p class="small" style="margin-bottom:0"><b>${f.verified_today}</b> sujet(s) repris par 3 médias ou plus depuis 24 h. <a href="/methode">Notre méthode</a></p>`;
+    <p class="small" style="margin-bottom:0"><b>${f.verified_today}</b> sujet(s) repris par 3 médias ou plus depuis 24 h. <a href="/verifications">Toutes les vérifications</a></p>`;
   rail.insertBefore(el, rail.children[1] || null);
 }
 async function loadHomeExtras() {
@@ -401,6 +414,7 @@ async function pageArticle(id) {
         <button class="btn sm" data-act="reader">${ico("reader")} Mode lecture épuré</button><button class="btn sm" data-act="print">${ico("print")} Imprimer / PDF</button></div>
       <div class="row" style="gap:6px 10px;margin-bottom:10px">${catBadge(a)}${mediaBadge(a.media_type)}${freshBadge(f)}${statusBadge(a.verification_status, a.verification_label)}${demoBadge(a)}</div>
       <h1>${esc(a.title)}</h1>
+      ${(a.verdicts || []).slice(0, 3).map((v) => verdictBox(v, S.user && S.user.role === "admin")).join("")}
       <div class="meta" style="margin:10px 0 16px;font-size:.88rem"><strong>${esc(a.source_name)}</strong>${a.author ? `<span>par ${esc(a.author)}</span>` : ""}
         <span>${ico("clock")} Publié le ${fmtDate(a.published_at)} (${esc(f.age)})</span><span>· Collecté le ${fmtDate(a.first_seen_at)}</span><span>· ${a.reading_time} min de lecture</span></div>
       ${f.warning ? `<div class="alert-line ${f.recirculating ? "bad" : "warn"}" style="margin-bottom:12px">${ico("alert")}<span><b>Indicateur de fraîcheur :</b> ${esc(f.warning)}</span></div>` : ""}
@@ -414,6 +428,7 @@ async function pageArticle(id) {
         <button class="btn" data-act="fav" data-id="${a.id}">${ico("star")} ${S.favs.has(a.id) ? "Retirer des favoris" : "Ajouter aux favoris"}</button>
         <button class="btn" data-act="share" data-id="${a.id}">${ico("share")} Partager</button>
         <button class="btn danger" data-act="report" data-id="${a.id}">${ico("flag")} Signaler une erreur</button>
+        ${S.user && S.user.role === "admin" ? `<button class="btn" data-act="verdict" data-id="${a.id}">${ico("shield")} Rendre un verdict</button>` : ""}
       </div>
       <div class="panel no-print">
         <div class="tabs" id="toolTabs">
@@ -530,7 +545,7 @@ async function tool(name) {
 }
 
 const stepMark = (ok) => `<span class="step-mark ${ok ? "ok" : "ko"}" role="img" aria-label="${ok ? "Étape validée" : "Étape non validée"}">${ico(ok ? "check" : "alert")}</span>`;
-const critList = (items, warnIcon = "x") => `<ul class="crit">${items.map((k) => `<li class="${k.ok ? "ok" : "ko"}">${ico(k.ok ? "check" : warnIcon)}<span><b>${esc(k.label)}</b> : ${esc(k.detail)}</span></li>`).join("")}</ul>`;
+const critList = (items, warnIcon = "x") => `<ul class="crit">${items.map((k) => `<li class="${k.ok ? "ok" : "ko"}">${ico(k.ok ? "check" : warnIcon)}<span><b>${esc(k.label)}</b> : ${esc(k.detail)}${safeUrl(k.url) ? ` <a href="${esc(safeUrl(k.url))}" target="_blank" rel="noopener">Lire l'analyse</a>` : ""}</span></li>`).join("")}</ul>`;
 function renderCheck(box, c) {
   const [s1, s2, s3, s4] = c.steps;
   const fc = c.factchecks;
@@ -731,6 +746,24 @@ async function pageMultimedia() {
   $("#mmList").innerHTML = cards(r.items);
 }
 
+async function pageVerifications(params) {
+  const q = new URLSearchParams(params || "");
+  const filt = q.get("verdict") || "";
+  const items = await get("/api/verdicts?limit=100" + (filt === "redaction" ? "&origin=redaction" : filt ? `&verdict=${filt}` : ""));
+  const tabs = [["", "Tout"], ["faux", "Faux"], ["trompeur", "Trompeur"], ["vrai", "Vrai"], ["analyse", "Analyses"], ["redaction", "Rédaction Prisme"]];
+  main().innerHTML = `
+    <div class="page-head"><div><h1>${ico("shield")} Vérification des faits</h1>
+      <p class="lead">Prisme ne décide jamais seul qu'une information est vraie ou fausse. Les verdicts ci-dessous viennent de fact-checkers professionnels, dont l'analyse est liée, ou de la rédaction Prisme, avec explication et sources. Chaque verdict s'affiche aussi sur les articles du même événement, chez tous les médias.</p></div></div>
+    <div class="tabs">${tabs.map(([k, l]) => `<a class="tab ${filt === k ? "active" : ""}" href="/verifications${k ? `?verdict=${k}` : ""}">${l}</a>`).join("")}</div>
+    <div class="panel" style="padding:6px 18px">${items.map((v) => `<div class="switch" style="align-items:flex-start">
+      <div><div class="row" style="gap:6px">${verdictBadge(v)}<span class="small muted">${fmtDate(v.created_at)}</span></div>
+        <h3 style="margin:6px 0"><a href="/article/${v.article_id}">${esc(v.origin === "factcheck" ? v.claim : v.article_title)}</a></h3>
+        ${v.explanation ? `<p class="small">${esc(v.explanation)}</p>` : ""}
+        <div class="small muted">${v.source_count > 1 ? `Événement couvert par ${v.source_count} médias · <a href="/sujet/${v.cluster_id}">comparer</a> · ` : ""}${safeUrl(v.url) ? `<a href="${esc(safeUrl(v.url))}" target="_blank" rel="noopener">analyse complète chez ${esc(v.checker)}</a>` : ""}</div></div></div>`).join("")
+      || empty("Aucune vérification pour ce filtre pour le moment.", "shield")}</div>
+    <p class="small muted">Les verdicts des fact-checkers sont lus dans le titre de leur analyse (« Non, cette vidéo… », « Attention, c'est faux »). Un titre sans conclusion claire est classé « Analyse ». Ouvrez toujours l'analyse complète.</p>`;
+}
+
 let localOffset = 0;
 async function pageLocal(params) {
   const q = new URLSearchParams(params || "");
@@ -805,7 +838,7 @@ async function pageFavorites(params) {
 async function pageNotifications() {
   if (!S.user) return needLogin("les notifications");
   const n = await get("/api/notifications");
-  const KIND = { alerte: ["bell", "Alerte"], signalement: ["flag", "Signalement"], systeme: ["info", "Système"], digest: ["digest", "Digest"], abonnement: ["eye", "Abonnement"] };
+  const KIND = { alerte: ["bell", "Alerte"], signalement: ["flag", "Signalement"], systeme: ["info", "Système"], digest: ["digest", "Digest"], abonnement: ["eye", "Abonnement"], verdict: ["shield", "Verdict"] };
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("bell")} Notifications</h1><p class="lead">Nouveaux articles de vos médias, alertes par mots-clés, suivi de vos signalements et messages de la plateforme.</p></div>
       <div class="row"><button class="btn" data-act="pushperm">${ico("bell")} Activer les notifications du navigateur</button><button class="btn primary" data-act="readall">${ico("check")} Tout marquer comme lu</button></div></div>
@@ -1157,6 +1190,24 @@ async function toggleSub(el) {
   $$(`[data-act="sub"]`).forEach((b) => { if (b.dataset.pub === pub) b.outerHTML = subBtn(b.dataset.id, pub, b.classList.contains("sm")); });
 }
 
+function openVerdict(id) {
+  modal(`<h2>${ico("shield")} Rendre un verdict</h2>
+    <p class="small muted">Le verdict s'applique à tout l'événement. Il sera affiché avec votre explication et vos sources, et les lecteurs qui ont lu ou enregistré cette information seront prévenus.</p>
+    <form id="verdictForm" class="stack">
+      <label>Verdict<select class="input" name="verdict" required><option value="faux">Faux : l'information est inexacte</option><option value="trompeur">Trompeur : vrai en partie, sorti de son contexte</option><option value="vrai">Vrai : l'information est confirmée</option></select></label>
+      <label>Explication (au moins 30 caractères)<textarea class="input" name="explanation" rows="4" minlength="30" required placeholder="Ce qui est faux ou confirmé, et comment vous l'avez vérifié."></textarea></label>
+      <label>Sources (un lien par ligne : communiqué officiel, document, fact-check…)<textarea class="input" name="sources" rows="3" required placeholder="https://www.gouv.ci/…"></textarea></label>
+      <button class="btn primary">${ico("check")} Publier le verdict</button></form>`);
+  $("#verdictForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    try {
+      const r = await post("/api/verdicts", { article_id: +id, verdict: f.verdict, explanation: f.explanation, sources: f.sources.split(/\s+/).filter(Boolean) });
+      closeModal(); toast(`Verdict publié. ${r.notified} lecteur(s) prévenu(s).`); route();
+    } catch (err) { toast(err.message, 1); }
+  };
+}
+
 async function hideSource(el) {
   if (!S.user) { toast("Connectez-vous pour masquer un média."); nav("/connexion"); return; }
   const pub = el.dataset.pub;
@@ -1392,6 +1443,8 @@ document.addEventListener("click", async (e) => {
       case "fav": prevent(); await toggleFav(id, el); break;
       case "sub": prevent(); await toggleSub(el); break;
       case "hide": prevent(); await hideSource(el); break;
+      case "verdict": openVerdict(id); break;
+      case "verdictdel": if (confirm("Retirer ce verdict ? Il restera dans l'historique et ne sera plus affiché.")) { await del(`/api/verdicts/${id}`); toast("Verdict retiré."); route(); } break;
       case "unhide": await del(`/api/hidden/${id}`); toast("Média réaffiché."); pageVeille(); break;
       case "share": prevent(); await openShare(id); break;
       case "report": prevent(); openReport(+id); break;
@@ -1519,7 +1572,7 @@ const ROUTES = [
   [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
   [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
-  [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
+  [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/verifications\??(.*)/, pageVerifications, "Vérification des faits"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
   [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
 async function route() {

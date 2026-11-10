@@ -58,6 +58,8 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 | Ensuite | **Signalement d'erreurs** + modération + correction publiée + notification du lecteur + journal des modifications | Drapeau, *Signalements*, *Administration* |
 | Ensuite | **Notifications personnalisées** par mots-clés (+ notifications du navigateur) | Cloche, *Veille & alertes* |
 | Ensuite | **Abonnements aux médias** : notification à chaque nouvel article d'un média suivi (tous ses flux) | Bouton « S'abonner » (article, *Médias suivis*), *Veille & alertes* |
+| Très important | **Vérification des faits** : verdicts vrai / faux / trompeur des fact-checkers (Franceinfo Vrai ou fake, Libération CheckNews, France 24 Les Observateurs, RFI, Le Monde Les Décodeurs) relayés sur tout l'événement, verdicts de la rédaction (explication + sources obligatoires), lecteurs prévenus | Encadrés sur l'article, page *Vérification des faits*, étape 4 |
+| Ensuite | Rubrique **Religion** (Vatican News, Réforme, Saphirnews et classement par mots-clés) | Barre des rubriques |
 | Ensuite | **Édition locale** « Près de chez vous » (pays du lecteur, Côte d'Ivoire par défaut) | Accueil, page */local* |
 | Ensuite | Onglet **« Mes médias »**, **masquer un média** (réaffichable), encadré **« À vérifier »** (chiffres divergents, démentis) | Fil, cartes, *Veille & alertes*, colonne de l'accueil |
 | Ensuite | **Personnalisation sans enfermement** : quota « Découverte », indice de diversité | Fil *Pour vous*, *Paramètres* |

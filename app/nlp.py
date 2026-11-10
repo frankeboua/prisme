@@ -33,6 +33,7 @@ POSITIVE = set("succès réussite progrès croissance victoire qualifié qualifi
 NEGATIVE = set("crise baisse chute mort morts décès victimes inondations catastrophe pénurie colère grève conflit attaque accident inquiétude flambée menace drame échec perte pertes tension violences scandale crisis death killed flood drop fall attack conflict loss fear".split())
 
 CATEGORY_KEYWORDS = {
+    "religion": "religion religions religieux religieuse religieuses église églises pape vatican catholique catholiques chrétien chrétiens chrétienne évêque évêques archevêque cardinal paroisse prêtre prêtres messe diocèse synode islam islamique musulman musulmans musulmane mosquée mosquées imam imams ramadan tabaski coran protestant protestants évangélique évangéliques pasteur pasteurs culte pèlerinage pèlerins hajj mecque laïcité spiritualité interreligieux œcuménique bible noël pâques carême",
     "politique": "gouvernement ministre président élection élections assemblée parti politique député sénat présidentielle opposition réforme vote décret conseil premier government election minister president parliament",
     "economie": "économie économique prix inflation carburant banque fcfa croissance pib entreprise marché investissement budget dette exportation cacao commerce emploi bourse economy market prices bank trade investment",
     "societe": "société population école éducation transport logement santé publique jeunesse femmes habitants quartier social justice police tribunal grève citoyens",

@@ -399,8 +399,8 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 39)
-        self.assertEqual(st["real_sources"], 20)
+        self.assertEqual(feeds, 47)
+        self.assertEqual(st["real_sources"], 24)   # + Libération, Vatican News, Réforme, Saphirnews (les autres flux ajoutés appartiennent à des éditeurs déjà suivis)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
         self.assertEqual(ivoirians, 9)
 
@@ -849,6 +849,102 @@ class FonctionsActualites(unittest.TestCase):
         r = call(server, "GET", "/api/factcheck")[2]
         self.assertIn("verified_today", r)
         self.assertTrue(all(x["label"] for x in r["items"]))
+
+
+class VerdictsEtReligion(unittest.TestCase):
+    """Fact-checkers relayés, verdicts de la rédaction, rubrique Religion."""
+
+    def setUp(self):
+        server._hits.clear()
+        server._anon_cache.clear()
+
+    def test_read_verdict_from_factchecker_titles(self):
+        self.assertEqual(engine.read_verdict("Non, cette vidéo ne montre pas une émeute à Abidjan"), "faux")
+        self.assertEqual(engine.read_verdict("Attention, ce chiffre sur la dette est faux"), "faux")
+        self.assertEqual(engine.read_verdict("Cette photo du pont est sortie de son contexte"), "trompeur")
+        self.assertEqual(engine.read_verdict("Oui, le tarif de l'électricité baisse bien en janvier"), "vrai")
+        self.assertIsNone(engine.read_verdict("Un lycéen interpellé : que s'est-il passé ?"))
+        self.assertIsNone(engine.read_verdict("Le Faucon de Paris remporte la course"))   # mot entier seulement
+
+    def test_factcheck_relayed_on_whole_event(self):
+        fc = db.scalar(CONN, "SELECT id FROM sources WHERE name='Franceinfo — Vrai ou fake'")
+        self.assertIsNotNone(fc)
+        claim = "Non, le gouvernement n'a pas annoncé la fermeture des écoles d'Abidjan pendant un mois"
+        target = add_article(src[0], "fc-news", "Fermeture des écoles d'Abidjan pendant un mois : la rumeur enfle", "Une rumeur circule.", 1, url="https://exemple.org/fc0")
+        fca = add_article(fc, "fc-1", claim, "Le ministère dément.", 1, url="https://exemple.org/fc1")
+        neutral = add_article(fc, "fc-2", "Que sait-on de la panne d'internet de lundi ?", "Analyse.", 1, url="https://exemple.org/fc2")
+        with db._lock:
+            CONN.execute("UPDATE articles SET cluster_id=(SELECT cluster_id FROM articles WHERE id=?) WHERE id=?", (target, fca))
+            if not db.scalar(CONN, "SELECT cluster_id FROM articles WHERE id=?", (target,)):
+                cid = CONN.execute("INSERT INTO clusters(label, lead_article_id, size, source_count) VALUES ('Écoles', ?, 2, 2)", (target,)).lastrowid
+                CONN.execute("UPDATE articles SET cluster_id=? WHERE id IN (?,?)", (cid, target, fca))
+            CONN.commit()
+        engine.sync_factchecks(CONN)
+        self.assertEqual(engine.sync_factchecks(CONN), 0)   # jamais en double
+        a = call(server, "GET", f"/api/articles/{target}")[2]
+        v = [x for x in a["verdicts"] if x["article_id"] == fca]
+        self.assertEqual((v[0]["verdict"], v[0]["checker"], v[0]["url"]), ("faux", "Franceinfo — Vrai ou fake", "https://exemple.org/fc1"))
+        step4 = call(server, "GET", f"/api/articles/{target}/check")[2]["steps"][3]
+        self.assertFalse(step4["ok"])
+        self.assertTrue(any(c["label"] == "Verdict : FAUX" for c in step4["checks"]))
+        analysed = [x for x in call(server, "GET", "/api/verdicts")[2] if x["article_id"] == neutral]
+        self.assertEqual(analysed[0]["verdict"], "analyse")
+        # Retrait par l'administrateur : le verdict disparaît et n'est pas recréé à la collecte suivante.
+        call(server, "DELETE", f"/api/verdicts/{v[0]['id']}", None, admin_token())
+        engine.sync_factchecks(CONN)
+        self.assertFalse([x for x in call(server, "GET", f"/api/articles/{target}")[2]["verdicts"] if x["article_id"] == fca])
+
+    def test_editorial_verdict_requires_sources_and_notifies_readers(self):
+        reader = new_user("lecteur-verdict")
+        call(server, "GET", f"/api/articles/{A2}", None, reader)      # le lecteur a lu un article du même événement
+        body = {"article_id": A1, "verdict": "faux", "explanation": "Le ministère de la pêche a publié un démenti officiel le jour même.",
+                "sources": ["https://www.gouv.ci/communique"]}
+        self.assertEqual(call(server, "POST", "/api/verdicts", body, reader)[0], 403)
+        self.assertEqual(call(server, "POST", "/api/verdicts", {**body, "explanation": "Faux."}, admin_token())[0], 400)
+        self.assertEqual(call(server, "POST", "/api/verdicts", {**body, "sources": ["javascript:alert(1)"]}, admin_token())[0], 400)
+        self.assertEqual(call(server, "POST", "/api/verdicts", {**body, "verdict": "peut-etre"}, admin_token())[0], 400)
+        st, _, r = call(server, "POST", "/api/verdicts", body, admin_token())
+        self.assertEqual(st, 200)
+        self.assertGreaterEqual(r["notified"], 1)
+        notes = [n for n in call(server, "GET", "/api/notifications", None, reader)[2] if n["kind"] == "verdict"]
+        self.assertTrue(notes and "Faux" in notes[0]["message"])
+        # Le verdict s'affiche sur tous les articles de l'événement, en premier.
+        for aid in (A1, A2, A3):
+            v = call(server, "GET", f"/api/articles/{aid}")[2]["verdicts"][0]
+            self.assertEqual((v["origin"], v["verdict"], v["sources"]), ("redaction", "faux", ["https://www.gouv.ci/communique"]))
+        card = next(x for x in call(server, "GET", "/api/feed?mode=recent&limit=60")[2]["items"] if x["cluster_id"] == db.scalar(CONN, "SELECT cluster_id FROM articles WHERE id=?", (A1,)))
+        self.assertEqual(card["verdict"]["verdict"], "faux")
+        self.assertIn("redaction", {x["origin"] for x in call(server, "GET", "/api/verdicts?origin=redaction")[2]})
+        call(server, "DELETE", f"/api/verdicts/{r['id']}", None, admin_token())
+
+    def test_giant_images_are_not_decoded(self):
+        """Un PNG géant ferait tomber un petit serveur (512 Mo) : il est ignoré, la photo d'origine est servie."""
+        from app import images
+        if images.Image is None:
+            self.skipTest("Pillow absent")
+        def encoded(size, fmt):
+            buf = io.BytesIO()
+            Image.new("RGB", size, (90, 90, 90)).save(buf, fmt)
+            return buf.getvalue()
+        old_fetch, old_cache = rss.fetch, images.CACHE
+        images.CACHE = os.path.join(os.path.dirname(db.DB_PATH), "imgtest")
+        try:
+            for name, data, expected in (("geant.png", encoded((4200, 4200), "PNG"), False), ("photo.jpg", encoded((1600, 1000), "JPEG"), True)):
+                rss.fetch = lambda url, max_bytes=None, d=data: d
+                self.assertEqual(bool(images.get("https://exemple.org/" + name, 480)), expected, name)
+        finally:
+            rss.fetch, images.CACHE = old_fetch, old_cache
+
+    def test_religion_section(self):
+        cats = {c["slug"] for c in call(server, "GET", "/api/categories")[2]}
+        self.assertIn("religion", cats)
+        rid = db.scalar(CONN, "SELECT id FROM categories WHERE slug='religion'")
+        slugs = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        self.assertEqual(nlp.classify("Le pape reçoit les évêques africains au Vatican", slugs), rid)
+        self.assertEqual(nlp.classify("Tabaski : les fidèles prient à la grande mosquée, l'imam appelle à la paix", slugs), rid)
+        faiths = {r["name"] for r in db.rows(CONN, "SELECT s.name FROM sources s JOIN categories c ON c.id=s.default_category WHERE c.slug='religion'")}
+        self.assertEqual(faiths, {"Vatican News", "Réforme", "Saphirnews"})
+        self.assertEqual(call(server, "GET", "/rubrique/religion")[0], 200)
 
 
 class TestsUtilisateurs(unittest.TestCase):

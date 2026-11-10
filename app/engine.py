@@ -394,6 +394,68 @@ def reliable_count(conn, publishers):
     return sum(1 for p in set(publishers) if cred.get(p, {}).get("reliable"))
 
 
+# =====================================================================
+#  2 ter. VERDICTS : FACT-CHECKERS PROFESSIONNELS ET RÉDACTION
+# =====================================================================
+VERDICT_LABEL = {"vrai": "Vrai", "faux": "Faux", "trompeur": "Trompeur", "analyse": "Analyse"}
+# Seules les formules de conclusion comptent : « fake news » ou « fausses informations » dans un titre désignent souvent le sujet, pas un verdict.
+_V_MISLEAD = re.compile(r" (trompeu[rs]e?s?|detourne(e|es|s)?|sortie?s? de (son|leur) contexte|hors contexte) ")
+_V_FALSE = re.compile(r" (c est faux|est faux|sont faux|est fausse|sont fausses|n a jamais|n ont jamais|aucune preuve|canulars?|infondee?s?"
+                      r"|(une|cette|ces) fausses? (video|videos|photo|photos|image|images|citation|capture|lettre|affiche)"
+                      r"|(un|ce|ces) faux (document|communique|compte|site|message|courrier|profil|article)) ")
+_V_TRUE = re.compile(r" (c est vrai|est bien vrai|bien reel(le)?|est authentique|c est confirme) ")
+
+
+def read_verdict(title):
+    """Conclusion exprimée par le titre d'un fact-checker (« Non, cette vidéo… », « Attention, ce chiffre est faux »).
+    Prudence : un titre sans conclusion claire ne reçoit aucun verdict."""
+    t = re.sub(r"^ (vrai ou faux|vrai ou fake|info ou intox) ", " ", db.normalize(title))   # noms de rubriques, pas des conclusions
+    if _V_MISLEAD.search(t):
+        return "trompeur"
+    if _V_FALSE.search(t) or t.startswith(" non "):      # « Non, cette vidéo ne montre pas… »
+        return "faux"
+    if _V_TRUE.search(t) or t.startswith(" oui "):      # « Oui, le tarif baisse bien… »
+        return "vrai"
+    return None
+
+
+@db.write
+def sync_factchecks(conn, days=30):
+    """Relaie les analyses des rubriques de fact-checking : un verdict par article, jamais recréé s'il a été retiré."""
+    from .seed import FACTCHECK_SOURCES
+    rows = db.rows(conn, f"""SELECT a.id, a.title, a.url, s.name source_name FROM articles a JOIN sources s ON s.id=a.source_id
+                             WHERE s.name IN ({",".join("?" * len(FACTCHECK_SOURCES))}) AND a.published_at>=?
+                               AND NOT EXISTS (SELECT 1 FROM verdicts v WHERE v.article_id=a.id AND v.origin='factcheck')""",
+                   (*FACTCHECK_SOURCES, db.ago(days=days)))
+    n = 0
+    for r in rows:
+        v = read_verdict(r["title"])
+        if not v and not FACTCHECK_SOURCES[r["source_name"]]:
+            continue
+        conn.execute("INSERT INTO verdicts(article_id, verdict, origin, checker, url, claim) VALUES (?,?,?,?,?,?)",
+                     (r["id"], v or "analyse", "factcheck", r["source_name"], r["url"], r["title"][:400]))
+        n += 1
+    conn.commit()
+    return n
+
+
+VERDICT_SQL = """SELECT v.id, v.article_id, v.verdict, v.origin, v.checker, v.url, v.claim, v.explanation, v.sources, v.created_at
+                 FROM verdicts v JOIN articles t ON t.id=v.article_id WHERE v.active=1 AND {where}
+                 ORDER BY v.origin='redaction' DESC, v.verdict='analyse', v.created_at DESC"""
+
+
+def verdicts_for(conn, a):
+    """Verdicts qui portent sur l'événement de l'article (même groupe) ou sur l'article lui-même."""
+    if a.get("cluster_id"):
+        rows = db.rows(conn, VERDICT_SQL.format(where="(t.cluster_id=? OR t.id=?)"), (a["cluster_id"], a["id"]))
+    else:
+        rows = db.rows(conn, VERDICT_SQL.format(where="t.id=?"), (a["id"],))
+    for r in rows:
+        r["label"] = VERDICT_LABEL[r["verdict"]]
+        r["sources"] = [x for x in (r["sources"] or "").split("\n") if x]
+    return rows
+
+
 def _search(prefix, q):
     return "https://www.google.com/search?q=" + urllib.parse.quote(f"{prefix} {q}")
 
@@ -429,6 +491,13 @@ def check_article(conn, a):
          "detail": f"{a['verification_label']} : d'autres médias rapportent une version différente." if a["verification_status"] == "conteste" else "Aucun écart de chiffres ni démenti repéré chez les médias suivis."},
         {"label": "Signalements des lecteurs", "ok": not open_reports, "detail": f"{open_reports} signalement(s) en cours d'examen." if open_reports else "Aucun signalement en attente."},
     ]
+    for v in verdicts_for(conn, a)[:3]:
+        who = "la rédaction Prisme" if v["origin"] == "redaction" else v["checker"]
+        if v["verdict"] == "analyse":
+            checks.append({"label": "Analyse d'un fact-checker", "ok": True, "detail": f"{who} a analysé ce sujet : « {v['claim']} »", "url": v["url"]})
+        else:
+            checks.append({"label": f"Verdict : {v['label'].upper()}", "ok": v["verdict"] == "vrai",
+                           "detail": f"Selon {who} : " + (v["explanation"] or f"« {v['claim']} »"), "url": v["url"]})
     q = a["title"][:110]
     tools = [{"label": "Google Fact Check Explorer", "url": "https://toolbox.google.com/factcheck/explorer/search/" + urllib.parse.quote(q) + ";hl=fr"},
              {"label": "AFP Factuel", "url": _search("site:factuel.afp.com", q)}, {"label": "Africa Check", "url": _search("site:africacheck.org", q)},
@@ -753,6 +822,8 @@ def decorate(conn, a, now=None):
         a["others"] = []
     a["reliable_sources"] = reliable_count(conn, [a.get("source_publisher") or a["source_name"]] + [o["publisher"] for o in a["others"]])
     a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"), a["reliable_sources"])
+    v = verdicts_for(conn, a)
+    a["verdict"] = {k: v[0][k] for k in ("verdict", "label", "origin", "checker")} if v else None
     a.pop("content", None)
     a["summary"] = nlp.strip_html(a.get("summary") or "")[:320]
     return a

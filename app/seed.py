@@ -15,6 +15,7 @@ CATEGORIES = [
     ("politique", "Politique", "#6366f1"), ("economie", "Économie", "#0ea5e9"), ("societe", "Société", "#14b8a6"),
     ("sport", "Sport", "#22c55e"), ("sante", "Santé", "#ef4444"), ("tech", "Tech & Numérique", "#8b5cf6"),
     ("culture", "Culture", "#f59e0b"), ("environnement", "Environnement", "#10b981"), ("international", "International", "#64748b"),
+    ("religion", "Religion", "#be185d"),
 ]
 
 NOTE = None
@@ -60,7 +61,24 @@ REAL_SOURCES = [
     ("Franceinfo Sports", "https://www.francetvinfo.fr", "https://www.francetvinfo.fr/sports.rss", "France", "fr", "tv", "sport", 70, 0),
     ("BBC Sport", "https://www.bbc.com/sport", "https://feeds.bbci.co.uk/sport/rss.xml", "Royaume-Uni", "en", "tv", "sport", 70, 0),
     ("Radio France — Le Cours de l'histoire", "https://www.radiofrance.fr", "https://radiofrance-podcast.net/podcast09/rss_10076.xml", "France", "fr", "podcast", "culture", 85, 1),
+    # Rubriques de vérification des faits (fact-checking) : leurs conclusions sont relayées, avec lien, sur les sujets concernés.
+    ("Franceinfo — Vrai ou fake", "https://www.francetvinfo.fr/vrai-ou-fake/", "https://www.francetvinfo.fr/vrai-ou-fake.rss", "France", "fr", "tv", None, 70, 0),
+    ("Libération — CheckNews", "https://www.liberation.fr/checknews/", "https://www.liberation.fr/arc/outboundfeeds/rss/category/checknews/?outputType=xml", "France", "fr", "presse", None, 70, 0),
+    ("France 24 — Les Observateurs", "https://observers.france24.com/fr", "https://observers.france24.com/fr/rss", "France", "fr", "tv", None, 70, 0),
+    ("RFI — Les dessous de l'infox", "https://www.rfi.fr/fr/podcasts/les-dessous-de-l-infox/", "https://www.rfi.fr/fr/podcasts/les-dessous-de-l-infox/podcast", "France", "fr", "podcast", None, 70, 0),
+    ("Le Monde — Les Décodeurs", "https://www.lemonde.fr/les-decodeurs/", "https://www.lemonde.fr/les-decodeurs/rss_full.xml", "France", "fr", "presse", None, 70, 0),
+    # Rubrique Religion : plusieurs confessions, présentées sans hiérarchie.
+    ("Vatican News", "https://www.vaticannews.va/fr", "https://www.vaticannews.va/fr.rss.xml", "Vatican", "fr", "web", "religion", 70, 0),
+    ("Réforme", "https://www.reforme.net", "https://www.reforme.net/feed/", "France", "fr", "presse", "religion", 70, 0),
+    ("Saphirnews", "https://www.saphirnews.com", "https://www.saphirnews.com/xml/syndication.rss", "France", "fr", "web", "religion", 70, 0),
 ]
+
+# Flux de fact-checking. True : rubrique entièrement consacrée à la vérification (chaque article est une analyse) ;
+# False : le flux mêle d'autres articles, seuls ceux dont le titre exprime une conclusion sont retenus.
+FACTCHECK_SOURCES = {
+    "Franceinfo — Vrai ou fake": True, "Libération — CheckNews": True, "France 24 — Les Observateurs": True,
+    "RFI — Les dessous de l'infox": True, "Le Monde — Les Décodeurs": False,
+}
 
 # Statut éditorial des médias réels (faits publics, sans jugement) : affiché sur la fiche « Vérifier la source ».
 SOURCE_PROFILES = {
@@ -84,6 +102,10 @@ SOURCE_PROFILES = {
     "Yeclo": "Site d'information ivoirien",
     "Ivoire Matin": "Site d'information ivoirien",
     "Abidjan TV": "Site d'information ivoirien",
+    "Libération": "Quotidien national français",
+    "Vatican News": "Média officiel du Saint-Siège (Église catholique)",
+    "Réforme": "Hebdomadaire d'actualité protestant",
+    "Saphirnews": "Site d'information sur le fait musulman",
 }
 
 DEMO_NOTE = "Source fictive créée pour la démonstration pédagogique (aucun lien avec un média réel)."

@@ -190,6 +190,8 @@ def refresh_all(conn, only_id=None):
                 ok += 1
                 new += store(conn, src, items, slug_ids)
     stats = engine.recluster(conn) if new else {}
+    if new:
+        engine.sync_factchecks(conn)
     verified = engine.verify_pending(conn, 5000) if new else 0
     if new:
         engine.refresh_statuses(conn)

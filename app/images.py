@@ -18,6 +18,7 @@ except ImportError:
 
 WIDTHS = (480, 960)
 MAX_BYTES = 10 * 1024 * 1024
+MAX_DECODED_PIXELS = 16_000_000     # après réduction JPEG ; au-delà, décoder demanderait des centaines de Mo
 CACHE = os.path.join(os.path.dirname(db.DB_PATH), "imgcache")
 _slots = threading.BoundedSemaphore(3)      # limite la mémoire et le processeur utilisés en même temps
 
@@ -40,7 +41,9 @@ def get(url, width):
         try:
             raw = rss.fetch(url, max_bytes=MAX_BYTES)
             with Image.open(io.BytesIO(raw)) as im:
-                im.draft("RGB", (width * 2, width * 2))
+                im.draft("RGB", (width * 2, width * 2))    # JPEG : décodage directement à taille réduite
+                if im.size[0] * im.size[1] > MAX_DECODED_PIXELS:
+                    return None     # image géante (souvent un PNG) : trop de mémoire pour un petit serveur, la photo d'origine est servie
                 im = im.convert("RGB")
                 im.thumbnail((width, width * 2))
                 buf = io.BytesIO()

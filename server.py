@@ -481,15 +481,79 @@ def feed(req, q, user):
                        min(int(qv(q, "limit", 24)), 60), int(qv(q, "offset", 0)), country=country)
 
 
+@route("GET", "/api/verdicts")
+def verdicts(req, q, user):
+    where, params = ["v.active=1"], []
+    if qv(q, "verdict") in engine.VERDICT_LABEL:
+        where.append("v.verdict=?"); params.append(qv(q, "verdict"))
+    if qv(q, "origin") in ("factcheck", "redaction"):
+        where.append("v.origin=?"); params.append(qv(q, "origin"))
+    rows = db.rows(CONN, f"""SELECT v.id, v.article_id, v.verdict, v.origin, v.checker, v.url, v.claim, v.explanation, v.sources, v.created_at,
+                                    t.title article_title, t.cluster_id, COALESCE(cl.source_count, 1) source_count, s.name source_name
+                             FROM verdicts v JOIN articles t ON t.id=v.article_id JOIN sources s ON s.id=t.source_id
+                             LEFT JOIN clusters cl ON cl.id=t.cluster_id
+                             WHERE {" AND ".join(where)} ORDER BY v.created_at DESC LIMIT ?""", (*params, min(int(qv(q, "limit", 60)), 200)))
+    for r in rows:
+        r["label"] = engine.VERDICT_LABEL[r["verdict"]]
+        r["sources"] = [x for x in (r["sources"] or "").split("\n") if x]
+    return rows
+
+
+@route("POST", "/api/verdicts", "admin")
+def add_verdict(req, body, user):
+    """Verdict de la rédaction : explication et au moins une source vérifiable obligatoires ; les lecteurs concernés sont prévenus."""
+    need(body, "article_id", "verdict", "explanation", "sources")
+    if body["verdict"] not in ("vrai", "faux", "trompeur"):
+        raise ApiError(400, "Verdict attendu : vrai, faux ou trompeur.")
+    explanation = str(body["explanation"]).strip()
+    if len(explanation) < 30:
+        raise ApiError(400, "Expliquez le verdict en au moins 30 caractères : les lecteurs doivent pouvoir le contrôler.")
+    sources = [str(x).strip() for x in (body["sources"] if isinstance(body["sources"], list) else str(body["sources"]).split()) if str(x).strip()]
+    if not sources or not all(rss.safe_url(x) for x in sources):
+        raise ApiError(400, "Indiquez au moins une source, sous forme de lien http(s).")
+    art = db.row(CONN, "SELECT id, title, cluster_id FROM articles WHERE id=?", (int(body["article_id"]),))
+    if not art:
+        raise ApiError(404, "Article introuvable.")
+    label = engine.VERDICT_LABEL[body["verdict"]]
+    with db._lock:
+        vid = CONN.execute("""INSERT INTO verdicts(article_id, verdict, origin, checker, claim, explanation, sources, created_by)
+                              VALUES (?,?,'redaction','Rédaction Prisme',?,?,?,?)""",
+                           (art["id"], body["verdict"], art["title"][:400], explanation[:2000], "\n".join(sources[:10])[:3000], user["id"])).lastrowid
+        db.log_change(CONN, user["username"], "verdict", vid, "création", f"{label} : {art['title']}")
+        ids = [r["id"] for r in db.rows(CONN, "SELECT id FROM articles WHERE cluster_id=?", (art["cluster_id"],))] if art["cluster_id"] else [art["id"]]
+        marks = ",".join("?" * len(ids))
+        readers = {r[0] for r in CONN.execute(f"""SELECT user_id FROM reading_history WHERE article_id IN ({marks})
+                                                 UNION SELECT user_id FROM favorites WHERE article_id IN ({marks})""", (*ids, *ids))}
+        for uid in readers:
+            CONN.execute("INSERT OR REPLACE INTO notifications(user_id, article_id, kind, message, is_read) VALUES (?,?,'verdict',?,0)",
+                         (uid, art["id"], f"Une information que vous avez lue a été jugée « {label} » par la rédaction Prisme : {art['title']}"[:400]))
+        CONN.commit()
+    return {"id": vid, "notified": len(readers)}
+
+
+@route("DELETE", r"/api/verdicts/(\d+)", "admin")
+@db.write
+def remove_verdict(req, q, user, vid):
+    """Retire un verdict (par exemple un titre de fact-checker mal interprété). Il est conservé dans l'historique et ne revient pas."""
+    CONN.execute("UPDATE verdicts SET active=0 WHERE id=?", (int(vid),))
+    db.log_change(CONN, user["username"], "verdict", int(vid), "retrait", "")
+    CONN.commit()
+    return {"ok": True}
+
+
 @route("GET", "/api/factcheck")
 def factcheck_box(req, q, user):
     """Encadré « À vérifier » : événements récents où les médias divergent (chiffres, démenti)."""
     rows = db.rows(CONN, engine.FEED_SQL.format(where=" AND a.is_cluster_lead=1 AND a.verification_status='conteste' AND a.published_at>=?")
                    + " ORDER BY a.published_at DESC LIMIT 5", (db.ago(days=4),))
     recoupes = db.scalar(CONN, """SELECT COUNT(*) FROM articles WHERE is_cluster_lead=1 AND verification_status='verifie' AND published_at>=?""", (db.ago(days=1),))
+    latest = db.rows(CONN, """SELECT v.verdict, v.checker, v.origin, v.claim, t.id article_id FROM verdicts v JOIN articles t ON t.id=v.article_id
+                              WHERE v.active=1 AND v.verdict<>'analyse' ORDER BY v.created_at DESC LIMIT 3""")
+    for v in latest:
+        v["label"] = engine.VERDICT_LABEL[v["verdict"]]
     return {"items": [{"id": a["id"], "title": a["title"], "source_name": a["source_name"], "published_at": a["published_at"], "cluster_id": a["cluster_id"],
                        "label": engine.status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"))} for a in rows],
-            "verified_today": recoupes}
+            "verdicts": latest, "verified_today": recoupes}
 
 
 @route("GET", "/api/languages")
@@ -625,6 +689,7 @@ def article(req, q, user, aid):
     out["credibility"] = {k: cred[k] for k in ("met", "total", "reliable", "statut")} if cred else None
     out["path"] = pages.article_path(a)
     out["reports"] = db.rows(CONN, "SELECT reason, status, admin_response, created_at FROM reports WHERE article_id=? ORDER BY created_at DESC", (a["id"],))
+    out["verdicts"] = engine.verdicts_for(CONN, out)
     if user:
         out["favorite"] = db.row(CONN, "SELECT * FROM favorites WHERE user_id=? AND article_id=?", (user["id"], a["id"]))
         prof = engine.user_profile(CONN, user["id"])
@@ -1442,6 +1507,20 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v6'"):
+        # Rubrique Religion et rubriques de fact-checking (novembre 2026).
+        CONN.execute("INSERT OR IGNORE INTO categories(slug, name, color) VALUES ('religion', 'Religion', '#be185d')")
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                            VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        kws = {nlp.stem(nlp.deaccent(k)) for k in nlp.CATEGORY_KEYWORDS["religion"].split()}
+        for a in db.rows(CONN, "SELECT id, title, summary FROM articles"):
+            if len(set(nlp.tokens(a["title"] + " " + (a["summary"] or ""))) & kws) >= 2:
+                CONN.execute("UPDATE articles SET category_id=? WHERE id=?", (cats["religion"], a["id"]))
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v6', '1')")
+        CONN.commit()
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v5'"):
         # Médias ivoiriens ajoutés en novembre 2026 : insérés une fois, un flux supprimé par l'administrateur ne revient pas.
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}

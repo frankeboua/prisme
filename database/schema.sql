@@ -206,6 +206,24 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher);
 
+-- Verdicts sur une information : conclusion d'un fact-checker professionnel (lien vers son analyse) ou de la rédaction
+-- Prisme (explication et sources obligatoires). Le verdict vise un article ; il s'applique à tout l'événement de cet article.
+CREATE TABLE IF NOT EXISTS verdicts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id  INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    verdict     TEXT    NOT NULL CHECK (verdict IN ('vrai','faux','trompeur','analyse')),
+    origin      TEXT    NOT NULL CHECK (origin IN ('factcheck','redaction')),
+    checker     TEXT    NOT NULL,
+    url         TEXT,
+    claim       TEXT,
+    explanation TEXT,
+    sources     TEXT,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    active      INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_verdicts_article ON verdicts(article_id);
+
 -- Médias masqués par un lecteur : leurs articles n'apparaissent plus dans ses fils (la recherche les montre toujours).
 CREATE TABLE IF NOT EXISTS hidden_sources (
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -218,7 +236,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     article_id  INTEGER REFERENCES articles(id) ON DELETE CASCADE,
-    kind        TEXT    NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement')),
+    kind        TEXT    NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement','verdict')),
     message     TEXT    NOT NULL,
     is_read     INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),

@@ -76,13 +76,13 @@ def migrate(conn):
         conn.execute("ALTER TABLE sources ADD COLUMN publisher TEXT")
     fill_publishers(conn)
     notif_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").fetchone()[0]
-    if "'abonnement'" not in notif_sql:
+    if "'verdict'" not in notif_sql:
         # SQLite ne modifie pas une contrainte CHECK : la table est recréée à l'identique, avec le type « abonnement ».
         conn.execute("ALTER TABLE notifications RENAME TO notifications_old")
         conn.execute("""CREATE TABLE notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             article_id INTEGER REFERENCES articles(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement')),
+            kind TEXT NOT NULL DEFAULT 'alerte' CHECK (kind IN ('alerte','signalement','systeme','digest','abonnement','verdict')),
             message TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE (user_id, article_id, kind))""")
         conn.execute("INSERT INTO notifications SELECT id, user_id, article_id, kind, message, is_read, created_at FROM notifications_old")
@@ -97,7 +97,8 @@ def fill_publishers(conn):
     """Regroupe les flux d'un même éditeur : Le Monde Afrique et Le Monde à la une sont un seul média."""
     conn.execute("""UPDATE sources SET publisher = CASE WHEN name LIKE 'Le Monde%' THEN 'Le Monde' WHEN name LIKE 'BBC%' THEN 'BBC'
                                                         WHEN name LIKE 'Radio France%' THEN 'Radio France' WHEN name LIKE 'France 24%' THEN 'France 24'
-                                                        WHEN name LIKE 'RFI%' THEN 'RFI' WHEN name LIKE 'Franceinfo%' THEN 'Franceinfo' ELSE name END
+                                                        WHEN name LIKE 'RFI%' THEN 'RFI' WHEN name LIKE 'Franceinfo%' THEN 'Franceinfo'
+                                                        WHEN name LIKE 'Libération%' THEN 'Libération' ELSE name END
                     WHERE publisher IS NULL""")
 
 
