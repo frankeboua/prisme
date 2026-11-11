@@ -172,8 +172,16 @@ def refresh_all(conn, only_id=None):
     log_id = conn.execute("INSERT INTO fetch_log(message) VALUES ('collecte en cours')").lastrowid
     conn.commit()
 
+    from . import scrape
+    known = {}
+    for src in sources:     # adresses déjà connues : le scraping ne relit pas une page déjà collectée
+        if src.get("fetch_method") == "scrape":
+            known[src["id"]] = {r[0] for r in conn.execute("SELECT url FROM articles WHERE source_id=? AND url IS NOT NULL", (src["id"],))}
+
     def job(src):
         try:
+            if src.get("fetch_method") == "scrape":
+                return src, scrape.collect(src, known.get(src["id"], set())), None
             return src, parse_feed(fetch(src["feed_url"])), None
         except Exception as e:  # réseau indisponible, flux invalide...
             return src, [], str(e)[:200]
@@ -192,6 +200,7 @@ def refresh_all(conn, only_id=None):
     stats = engine.recluster(conn) if new else {}
     if new:
         engine.sync_factchecks(conn)
+        engine.link_factchecks(conn)
     verified = engine.verify_pending(conn, 5000) if new else 0
     if new:
         engine.refresh_statuses(conn)

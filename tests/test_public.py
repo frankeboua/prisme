@@ -399,10 +399,11 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 47)
-        self.assertEqual(st["real_sources"], 24)   # + Libération, Vatican News, Réforme, Saphirnews (les autres flux ajoutés appartiennent à des éditeurs déjà suivis)
+        self.assertEqual(feeds, 56)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 3 médias collectés par extraction
+        self.assertEqual(st["real_sources"], 33)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 9)
+        self.assertEqual(ivoirians, 18)
+        self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 3)
 
 
 class Video(Case):
@@ -945,6 +946,166 @@ class VerdictsEtReligion(unittest.TestCase):
         faiths = {r["name"] for r in db.rows(CONN, "SELECT s.name FROM sources s JOIN categories c ON c.id=s.default_category WHERE c.slug='religion'")}
         self.assertEqual(faiths, {"Vatican News", "Réforme", "Saphirnews"})
         self.assertEqual(call(server, "GET", "/rubrique/religion")[0], 200)
+
+
+LISTING = """<html><body><nav><a href="/contact">Contact</a></nav>
+<a href="https://www.exemple-presse.ci/article/12/politique/le-gouvernement-adopte-un-plan">Plan</a>
+<a href="/article/13/economie/le-cacao-atteint-un-prix-record?utm=x">Cacao</a>
+<a href="/article/13/economie/le-cacao-atteint-un-prix-record">doublon</a>
+<a href="https://autre-site.com/article/14/politique/hors-du-site">ailleurs</a></body></html>"""
+ARTICLE = """<html><head><title>Titre de secours</title>
+<meta property="og:title" content="Le cacao atteint un prix record">
+<meta property="og:image" content="https://www.exemple-presse.ci/img/cacao.jpg">
+<script type="application/ld+json">{"@type": "NewsArticle", "datePublished": "2026-11-10T08:30:00+00:00", "author": {"name": "Awa Koné"}}</script>
+</head><body><aside><p>Le plus lu : un autre sujet très populaire de la semaine dernière, sans rapport aucun.</p></aside>
+<div class="post-text"><p class="x">Le prix bord champ du cacao atteint un niveau record cette saison, selon le Conseil Café-Cacao.
+<p>Les producteurs saluent la mesure annoncée lundi à Abidjan par le ministre de l'Agriculture.</div></body></html>"""
+
+
+class Extraction(unittest.TestCase):
+    """Web scraping des médias sans flux RSS : liens d'articles, métadonnées, respect de robots.txt."""
+
+    def setUp(self):
+        from app import scrape
+        self.scrape = scrape
+        self.old = (rss.fetch, scrape.robots_for, scrape.time.sleep)
+        scrape.time.sleep = lambda s: None
+
+    def tearDown(self):
+        rss.fetch, self.scrape.robots_for, self.scrape.time.sleep = self.old
+
+    def test_article_links_same_site_pattern_no_duplicates(self):
+        links = self.scrape.article_links(LISTING, "https://www.exemple-presse.ci/", r"^/article/\d+/[a-z0-9-]+/[a-z0-9-]+$")
+        self.assertEqual(links, ["https://www.exemple-presse.ci/article/12/politique/le-gouvernement-adopte-un-plan",
+                                 "https://www.exemple-presse.ci/article/13/economie/le-cacao-atteint-un-prix-record"])
+
+    def test_parse_article_metadata_and_excerpt(self):
+        it = self.scrape.parse_article(ARTICLE, "https://www.exemple-presse.ci/article/13/economie/le-cacao-atteint-un-prix-record")
+        self.assertEqual(it["title"], "Le cacao atteint un prix record")
+        self.assertEqual((it["author"], it["published_at"]), ("Awa Koné", "2026-11-10 08:30:00"))
+        self.assertTrue(it["summary"].startswith("Le prix bord champ du cacao"))   # bloc principal, pas la colonne « Le plus lu »
+        self.assertIn("ministre de l'Agriculture", it["summary"])                    # paragraphe non fermé lu quand même
+        self.assertEqual(it["content"], "")                                         # l'article n'est pas recopié
+        self.assertEqual(it["image_url"], "https://www.exemple-presse.ci/img/cacao.jpg")
+
+    def test_collect_respects_robots_and_known_urls(self):
+        import urllib.robotparser
+        pages = {"https://www.exemple-presse.ci/": LISTING}
+        fetched = []
+        def fake_fetch(url, timeout=None, max_bytes=None):
+            fetched.append(url)
+            return (pages.get(url) or ARTICLE).encode()
+        rss.fetch = fake_fetch
+        rp = urllib.robotparser.RobotFileParser()
+        rp.parse(["User-agent: *", "Disallow: /article/12/"])
+        self.scrape.robots_for = lambda base: rp
+        src = {"feed_url": "https://www.exemple-presse.ci/", "scrape_pattern": r"^/article/\d+/"}
+        items = self.scrape.collect(src)
+        self.assertEqual([i["url"] for i in items], ["https://www.exemple-presse.ci/article/13/economie/le-cacao-atteint-un-prix-record"])
+        self.assertNotIn("https://www.exemple-presse.ci/article/12/politique/le-gouvernement-adopte-un-plan", fetched)   # interdit : jamais lu
+        fetched.clear()
+        self.assertEqual(self.scrape.collect(src, {items[0]["url"]}), [])
+        self.assertEqual(fetched, ["https://www.exemple-presse.ci/"])                # déjà connu : pas relu
+        rp2 = urllib.robotparser.RobotFileParser()
+        rp2.parse(["User-agent: *", "Disallow: /"])
+        self.scrape.robots_for = lambda base: rp2
+        with self.assertRaises(PermissionError):
+            self.scrape.collect(src)
+
+    def test_directory_media_registered(self):
+        server._anon_cache.clear()
+        srcs = {s["name"]: s for s in call(server, "GET", "/api/sources")[2]}
+        self.assertEqual((srcs["Le Patriote"]["fetch_method"], srcs["Le Patriote"]["registry"]), ("scrape", "Annuaire ANP (presse)"))
+        self.assertEqual(srcs["7info"]["registry"], "Répertoire HACA (web TV)")
+        self.assertEqual(srcs["7info"]["fetch_method"], "rss")
+
+
+class ConclusionEtInfluence(unittest.TestCase):
+    """Prisme confirme ou infirme ; analyses sur un sujet proche ; médias en progression."""
+
+    def setUp(self):
+        server._hits.clear()
+        server._anon_cache.clear()
+
+    def base(self, **kw):
+        a = {"verification_status": "verifie", "verification_label": "", "reliable_sources": 3, "freshness": {}, "reports_count": 0}
+        a.update(kw)
+        return a
+
+    def test_conclusion_rules(self):
+        faux = [{"verdict": "faux", "origin": "factcheck", "checker": "Libération — CheckNews"}]
+        self.assertEqual(engine.conclusion(self.base(), faux)["code"], "infirmee")          # le fact-check prime sur le recoupement
+        self.assertIn("Libération", engine.conclusion(self.base(), faux)["basis"])
+        self.assertEqual(engine.conclusion(self.base(), [{"verdict": "vrai", "origin": "redaction", "checker": "x"}])["code"], "confirmee")
+        self.assertEqual(engine.conclusion(self.base(), [{"verdict": "analyse", "origin": "factcheck", "checker": "x"}])["code"], "confirmee")
+        self.assertEqual(engine.conclusion(self.base(), [])["by"], "recoupement")
+        self.assertEqual(engine.conclusion(self.base(verification_status="conteste", verification_label="Chiffres divergents"), [])["code"], "contestee")
+        self.assertEqual(engine.conclusion(self.base(reliable_sources=2), [])["code"], "non_confirmee")
+        self.assertEqual(engine.conclusion(self.base(freshness={"recirculating": True}), [])["code"], "non_confirmee")
+        self.assertEqual(engine.conclusion(self.base(reports_count=1), [])["code"], "non_confirmee")
+
+    def test_article_and_card_carry_conclusion(self):
+        a = call(server, "GET", f"/api/articles/{A1}")[2]
+        self.assertIn(a["conclusion"]["code"], engine.CONCLUSION_LABEL)
+        self.assertTrue(a["conclusion"]["basis"])
+        self.assertIn("conclusion", call(server, "GET", f"/api/articles/{A1}/check")[2])
+        self.assertTrue(all("conclusion" in x for x in call(server, "GET", "/api/feed?limit=10")[2]["items"]))
+
+    def test_related_factcheck_never_infirms_alone(self):
+        fc = db.scalar(CONN, "SELECT id FROM sources WHERE name='Libération — CheckNews'")
+        news = add_article(src[3], "rel-news", "Pétition pour supprimer la chaîne CNews : 300 000 signatures recueillies",
+                           "La pétition visant la chaîne CNews dépasse 300 000 signatures.", 2, url="https://exemple.org/rel1")
+        fca = add_article(fc, "rel-fc", "Non, la pétition pour supprimer CNews n'a pas recueilli 300 000 signatures en un jour",
+                          "La pétition CNews a progressé moins vite que ce qui est affirmé.", 1, url="https://exemple.org/rel2")
+        with db._lock:
+            CONN.execute("UPDATE articles SET cluster_id=NULL WHERE id IN (?,?)", (news, fca))
+            CONN.commit()
+        engine.sync_factchecks(CONN)
+        self.assertGreaterEqual(engine.link_factchecks(CONN), 1)
+        a = call(server, "GET", f"/api/articles/{news}")[2]
+        self.assertEqual(a["related_factchecks"][0]["url"], "https://exemple.org/rel2")
+        self.assertNotIn(a["conclusion"]["code"], ("infirmee", "trompeuse"))                # sujet proche : information seulement
+        step4 = call(server, "GET", f"/api/articles/{news}/check")[2]["steps"][3]
+        self.assertTrue(any(c["label"] == "Fact-check sur un sujet proche" for c in step4["checks"]))
+        unrelated = add_article(src[2], "rel-none", "Football : victoire de l'ASEC Mimosas en Ligue 1", "Le club s'impose 2-0.", 1, url="https://exemple.org/rel3")
+        engine.link_factchecks(CONN)
+        self.assertEqual(call(server, "GET", f"/api/articles/{unrelated}")[2]["related_factchecks"], [])
+
+    def test_influence_first_to_publish_and_rising(self):
+        pubs = db.rows(CONN, "SELECT id, COALESCE(publisher, name) pub FROM sources WHERE is_demo=0 GROUP BY COALESCE(publisher, name) ORDER BY id LIMIT 4")
+        leader, others = pubs[0], pubs[1:]
+        with db._lock:
+            for k in range(3):     # trois événements où « leader » publie en premier, repris ensuite par trois médias
+                cid = CONN.execute("INSERT INTO clusters(label, size, source_count) VALUES (?, 4, 4)", (f"Événement {k}",)).lastrowid
+                for j, s in enumerate([leader] + others):
+                    aid = CONN.execute("""INSERT INTO articles(source_id, guid, title, summary, url, language, published_at, first_seen_at, cluster_id)
+                                          VALUES (?,?,?,?,?,'fr',?,?,?)""", (s["id"], f"inf-{k}-{j}", f"Événement {k} vu par {s['pub']}", "x",
+                                                                            f"https://exemple.org/inf/{k}/{j}", db.ago(hours=30 - j), db.now_str(), cid)).lastrowid
+            CONN.commit()
+        d = call(server, "GET", "/api/influence?days=7")[2]
+        self.assertFalse(d["comparable"])                 # base neuve : pas de « progression » sans historique de collecte
+        self.assertFalse(any(r["rising"] for r in d["items"]))
+        with db._lock:                                    # Prisme collectait déjà il y a 15 jours
+            CONN.execute("""INSERT INTO articles(source_id, guid, title, summary, url, language, published_at, first_seen_at)
+                            VALUES (?, 'inf-ancien', 'Article collecté il y a quinze jours', 'x', 'https://exemple.org/inf/ancien', 'fr', ?, ?)""",
+                         (leader["id"], db.ago(days=16), db.ago(days=15)))
+            CONN.commit()
+        server._anon_cache.clear()
+        d = call(server, "GET", "/api/influence?days=7")[2]
+        self.assertTrue(d["comparable"])
+        row = next(r for r in d["items"] if r["publisher"] == leader["pub"])
+        comp = {c["key"]: c["value"] for c in row["components"]}
+        self.assertGreaterEqual(comp["first"], 3)
+        self.assertGreaterEqual(comp["followers"], 9)
+        self.assertTrue(row["rising"])                    # rien la semaine précédente : nouveau venu en progression
+        self.assertEqual(call(server, "GET", "/api/influence?days=0")[0], 400)
+        self.assertEqual(call(server, "GET", "/influence")[0], 200)
+
+    def test_no_more_disclaimer_that_prisme_does_not_verify(self):
+        for path in ("/", "/methode"):
+            html = call(server, "GET", path)[2]
+            self.assertNotIn("ne certifie pas", html)
+        self.assertIn("confirme ou infirme", call(server, "GET", "/methode")[2])
 
 
 class TestsUtilisateurs(unittest.TestCase):

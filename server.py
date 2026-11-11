@@ -409,6 +409,7 @@ def sources(req, q, user):
     for it in items:
         c = cred.get(it.get("publisher") or it["name"])
         it["credibility"] = {k: c[k] for k in ("met", "total", "reliable", "statut", "criteria")} if c else None
+        it["registry"] = c.get("registry") if c else None
         if not (user and user["role"] == "admin"):
             it.pop("last_error", None)
     return items
@@ -479,6 +480,14 @@ def feed(req, q, user):
         raise ApiError(400, "Pays inconnu.")
     return engine.feed(CONN, user, mode, qv(q, "category"), qv(q, "media"), qv(q, "source"),
                        min(int(qv(q, "limit", 24)), 60), int(qv(q, "offset", 0)), country=country)
+
+
+@route("GET", "/api/influence")
+def influence(req, q, user):
+    days = int(qv(q, "days", 7))
+    if not 1 <= days <= 30:
+        raise ApiError(400, "Période attendue : de 1 à 30 jours.")
+    return engine.influence(CONN, days)
 
 
 @route("GET", "/api/verdicts")
@@ -686,10 +695,11 @@ def article(req, q, user, aid):
     out["claims"] = engine.get_verification(CONN, a["id"])
     out["source"] = db.row(CONN, "SELECT id, name, COALESCE(publisher, name) publisher, website, country, language, kind, reliability, certified, is_demo, reliability_note FROM sources WHERE id=?", (a["source_id"],))
     cred = engine.source_credibility(CONN).get(a.get("source_publisher") or a["source_name"])
-    out["credibility"] = {k: cred[k] for k in ("met", "total", "reliable", "statut")} if cred else None
+    out["credibility"] = {k: cred[k] for k in ("met", "total", "reliable", "statut", "registry")} if cred else None
     out["path"] = pages.article_path(a)
     out["reports"] = db.rows(CONN, "SELECT reason, status, admin_response, created_at FROM reports WHERE article_id=? ORDER BY created_at DESC", (a["id"],))
     out["verdicts"] = engine.verdicts_for(CONN, out)
+    out["related_factchecks"] = engine.related_factchecks(CONN, out)
     if user:
         out["favorite"] = db.row(CONN, "SELECT * FROM favorites WHERE user_id=? AND article_id=?", (user["id"], a["id"]))
         prof = engine.user_profile(CONN, user["id"])
@@ -1264,7 +1274,7 @@ if PUBLIC:
 TEXT_TYPES = ("text/", "application/javascript", "application/json", "application/xml", "image/svg")
 _template = None
 # Réponses identiques pour tous les visiteurs non connectés : calculées une seule fois par période.
-ANON_CACHED = {"/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources", "/api/countries", "/api/languages"}
+ANON_CACHED = {"/api/influence", "/api/feed", "/api/trends", "/api/stats", "/api/digest", "/api/categories", "/api/config", "/api/sources", "/api/countries", "/api/languages"}
 ANON_TTL = 300    # vidé à chaque collecte
 _anon_cache = {}
 
@@ -1507,6 +1517,16 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v7'"):
+        # Médias de l'annuaire officiel (ANP, HACA), par flux RSS ou par extraction de page (novembre 2026).
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                            VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        seed.insert_scraped(CONN, cats)
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v7', '1')")
+        CONN.commit()
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v6'"):
         # Rubrique Religion et rubriques de fact-checking (novembre 2026).
         CONN.execute("INSERT OR IGNORE INTO categories(slug, name, color) VALUES ('religion', 'Religion', '#be185d')")

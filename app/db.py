@@ -72,8 +72,12 @@ def migrate(conn):
         conn.execute("ALTER TABLE users ADD COLUMN font_family TEXT NOT NULL DEFAULT 'prisme'")
     if "country" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN country TEXT")
-    if "publisher" not in {r[1] for r in conn.execute("PRAGMA table_info(sources)")}:
+    src_cols = {r[1] for r in conn.execute("PRAGMA table_info(sources)")}
+    if "publisher" not in src_cols:
         conn.execute("ALTER TABLE sources ADD COLUMN publisher TEXT")
+    if "fetch_method" not in src_cols:
+        conn.execute("ALTER TABLE sources ADD COLUMN fetch_method TEXT NOT NULL DEFAULT 'rss'")
+        conn.execute("ALTER TABLE sources ADD COLUMN scrape_pattern TEXT")
     fill_publishers(conn)
     notif_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'").fetchone()[0]
     if "'verdict'" not in notif_sql:

@@ -20,6 +20,7 @@ STATIC_PAGES = {
     "/digest": ("Le digest du jour", "L'essentiel de l'actualité en quelques minutes, résumé à partir de plusieurs sources citées."),
     "/multimedia": ("Podcasts et vidéos", "Les podcasts et vidéos des médias suivis par Prisme."),
     "/projet": ("Le projet Prisme", "Pourquoi Prisme existe, comment il fonctionne et qui le réalise."),
+    "/influence": ("Médias en progression : l'influence des médias ivoiriens et internationaux", "Les médias dont l'influence grandit : premiers à publier, repris par les autres, suivis par les lecteurs. Méthode et poids affichés."),
     "/verifications": ("Vérification des faits : vrai, faux, trompeur", "Les conclusions des fact-checkers professionnels et de la rédaction Prisme sur les informations qui circulent, avec leurs sources."),
     "/local": ("Près de chez vous : l'actualité de Côte d'Ivoire", "L'actualité ivoirienne comparée entre médias ivoiriens et internationaux, pays par pays."),
 }
@@ -184,7 +185,7 @@ def render(conn, path, site, feed=lambda category="": {"items": []}):
 
     if path == "/methode":
         return 200, {**base, "title": "Notre méthode : ce que Prisme affirme et n'affirme pas", "desc": "Comment Prisme regroupe les articles, ce que signifient ses statuts et les limites de l'outil.",
-                     "main": "<h1>Notre méthode</h1><p>Prisme mesure la couverture d'un événement par plusieurs médias. Il ne certifie pas la véracité des faits.</p>"
+                     "main": "<h1>Notre méthode</h1><p>Prisme compare la couverture d'un événement par plusieurs médias, puis confirme ou infirme l'information à l'aide du fact-checking et du recoupement par au moins trois sources fiables.</p>"
                              "<h2>La vérification en quatre étapes</h2><ol><li>Vérifier la source : média, statut, pays, auteur et article original.</li>"
                              "<li>Vérifier la crédibilité de la source : six indicateurs mesurés sur ses articles reçus.</li>"
                              "<li>Croiser au moins trois sources fiables qui traitent le même événement.</li>"
@@ -238,7 +239,7 @@ def fill_template(tpl, ctx, conn):
 
 
 def sitemap(conn, site):
-    urls = [(site + "/", None), (site + "/tendances", None), (site + "/digest", None), (site + "/sources", None), (site + "/methode", None), (site + "/projet", None), (site + "/local", None), (site + "/verifications", None)]
+    urls = [(site + "/", None), (site + "/tendances", None), (site + "/digest", None), (site + "/sources", None), (site + "/methode", None), (site + "/projet", None), (site + "/local", None), (site + "/verifications", None), (site + "/influence", None)]
     urls += [(f"{site}/rubrique/{c['slug']}", None) for c in db.rows(conn, "SELECT slug FROM categories")]
     # Seuls les sujets comparant plusieurs médias apportent une valeur propre.
     urls += [(site + topic_path(c["id"], c["label"]), c["last_published"]) for c in db.rows(

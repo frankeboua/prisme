@@ -71,7 +71,33 @@ REAL_SOURCES = [
     ("Vatican News", "https://www.vaticannews.va/fr", "https://www.vaticannews.va/fr.rss.xml", "Vatican", "fr", "web", "religion", 70, 0),
     ("Réforme", "https://www.reforme.net", "https://www.reforme.net/feed/", "France", "fr", "presse", "religion", 70, 0),
     ("Saphirnews", "https://www.saphirnews.com", "https://www.saphirnews.com/xml/syndication.rss", "France", "fr", "web", "religion", 70, 0),
+    # Médias de l'annuaire officiel (ANP : presse numérique ; HACA : web TV) dont le flux RSS existe sans être annoncé.
+    ("7info", "https://7info.ci", "https://7info.ci/rss", "Côte d'Ivoire", "fr", "tv", None, 70, 0),
+    ("Afrique Matin", "https://afriquematin.net", "https://afriquematin.net/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Justeinfos", "https://www.justeinfos.net", "https://www.justeinfos.net/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Artici", "https://artici.info", "https://artici.info/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Le Point Sur", "https://www.lepointsur.com", "https://www.lepointsur.com/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
+    ("Cacao Café News", "https://cacaocafenews.com", "https://cacaocafenews.com/index.php/feed/", "Côte d'Ivoire", "fr", "web", "economie", 70, 0),
 ]
+
+# Médias sans flux RSS, collectés par extraction de leur page d'accueil (app/scrape.py), dans le respect de robots.txt.
+# nom, site, page de liste, pays, langue, type, catégorie par défaut, motif des adresses d'articles
+SCRAPED_SOURCES = [
+    ("Fraternité Matin", "https://www.fratmat.info", "https://www.fratmat.info/", "Côte d'Ivoire", "fr", "presse", None, r"^/article/\d+/[a-z0-9-]+/[a-z0-9-]+$"),
+    ("Le Patriote", "https://lepatriote.ci", "https://lepatriote.ci/", "Côte d'Ivoire", "fr", "presse", "politique", r"^/(?!le-patriote-n)[a-z0-9]+(?:-[a-z0-9]+){4,}$"),
+    ("Le Débat Ivoirien", "https://www.ledebativoirien.net", "https://www.ledebativoirien.net/", "Côte d'Ivoire", "fr", "web", None, r"^/article/[a-z0-9-]{15,}$"),
+]
+
+# Référencement dans les annuaires officiels des régulateurs (relevé le 11 novembre 2026) :
+# ANP, « Sites des entreprises de presse » et « Éditeurs de presse numérique » ; HACA, répertoires des télévisions et des web TV.
+SOURCE_REGISTRY = {
+    "L'Intelligent d'Abidjan": "Annuaire ANP (presse)", "Le Banco.net": "Annuaire ANP (presse numérique)",
+    "Afrique Matin": "Annuaire ANP (presse numérique)", "Justeinfos": "Annuaire ANP (presse numérique)",
+    "Artici": "Annuaire ANP (presse numérique)", "Le Point Sur": "Annuaire ANP (presse numérique)",
+    "Cacao Café News": "Annuaire ANP (presse numérique)", "Le Débat Ivoirien": "Annuaire ANP (presse numérique)",
+    "Fraternité Matin": "Annuaire ANP (presse numérique)", "Le Patriote": "Annuaire ANP (presse)",
+    "7info": "Répertoire HACA (web TV)", "RTI Info": "Répertoire HACA (télévision publique)",
+}
 
 # Flux de fact-checking. True : rubrique entièrement consacrée à la vérification (chaque article est une analyse) ;
 # False : le flux mêle d'autres articles, seuls ceux dont le titre exprime une conclusion sont retenus.
@@ -106,6 +132,15 @@ SOURCE_PROFILES = {
     "Vatican News": "Média officiel du Saint-Siège (Église catholique)",
     "Réforme": "Hebdomadaire d'actualité protestant",
     "Saphirnews": "Site d'information sur le fait musulman",
+    "Fraternité Matin": "Quotidien ivoirien du groupe public Fraternité Matin",
+    "Le Patriote": "Quotidien ivoirien",
+    "Le Débat Ivoirien": "Quotidien d'information ivoirien en ligne",
+    "7info": "Web TV d'information ivoirienne",
+    "Afrique Matin": "Site d'information ivoirien",
+    "Justeinfos": "Site d'information ivoirien",
+    "Artici": "Site d'information ivoirien",
+    "Le Point Sur": "Site d'information ivoirien",
+    "Cacao Café News": "Site d'information ivoirien spécialisé (café-cacao)",
 }
 
 DEMO_NOTE = "Source fictive créée pour la démonstration pédagogique (aucun lien avec un média réel)."
@@ -386,6 +421,13 @@ def make_demo_audio(path, seconds=24):
 
 
 @db.write
+def insert_scraped(conn, cats):
+    for name, site, listing, country, lang, kind, dcat, pattern in SCRAPED_SOURCES:
+        conn.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified,
+                                                      fetch_method, scrape_pattern) VALUES (?,?,?,?,?,?,?,70,0,'scrape',?)""",
+                     (name, site, listing, country, lang, kind, cats.get(dcat), pattern))
+
+
 def seed_public(conn, admin_user=None, admin_password=None):
     """Base de production : référentiels et médias réels uniquement, aucun contenu ni compte fictif."""
     cat = {}
@@ -394,6 +436,7 @@ def seed_public(conn, admin_user=None, admin_password=None):
     for name, site, feed, country, lang, kind, dcat, _rel, _cert in REAL_SOURCES:
         conn.execute("""INSERT INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                         VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cat.get(dcat)))
+    insert_scraped(conn, cat)
     for term, simple, definition in GLOSSARY:
         conn.execute("INSERT INTO glossary(term, simple, definition) VALUES (?,?,?)", (term, simple, definition))
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('neutral_sources', '1')")

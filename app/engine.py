@@ -4,12 +4,13 @@ import re
 import time
 import urllib.parse
 from collections import Counter, defaultdict
+from datetime import timedelta
 
 from . import db, nlp
 
 PUB = "COALESCE(s.publisher, s.name)"   # plusieurs flux d'un même éditeur comptent pour un seul média
 
-# Les statuts décrivent la couverture observée : Prisme ne certifie pas la véracité d'un fait.
+# Les statuts décrivent la couverture observée ; la conclusion (confirmée, infirmée…) s'appuie sur le fact-checking et le recoupement.
 STATUS_LABEL = {
     "verifie": "Repris par 3 sources ou plus", "partiel": "Repris par 2 sources", "non_verifie": "Source unique",
     "conteste": "Désaccord entre sources", "en_attente": "En attente d'analyse",
@@ -344,7 +345,7 @@ def source_credibility(conn, max_age=600):
     chaque indicateur affiche sa mesure, et un média ne compte comme « source fiable » que s'il en remplit au moins quatre."""
     if _CRED["data"] and time.monotonic() - _CRED["at"] < max_age:
         return _CRED["data"]
-    from .seed import SOURCE_PROFILES
+    from .seed import SOURCE_PROFILES, SOURCE_REGISTRY
     srcs = {}
     for s in db.rows(conn, f"SELECT {PUB} pub, s.name, s.kind, s.website, s.country, s.is_demo, s.reliability FROM sources s WHERE s.active=1 ORDER BY s.is_demo, s.id"):
         srcs.setdefault(s["pub"], s)
@@ -384,6 +385,7 @@ def source_credibility(conn, max_age=600):
         ]
         met = sum(1 for c in crit if c["ok"])
         out[pub] = {"publisher": pub, "statut": crit[1]["detail"], "kind": KIND_LABEL.get(s["kind"], s["kind"]), "website": s["website"], "country": s["country"],
+                    "registry": SOURCE_REGISTRY.get(pub),
                     "is_demo": s["is_demo"], "articles": n, "criteria": crit, "met": met, "total": len(crit), "reliable": met >= RELIABLE_MIN}
     _CRED.update(at=time.monotonic(), data=out)
     return out
@@ -456,6 +458,150 @@ def verdicts_for(conn, a):
     return rows
 
 
+# Rapprochement élargi : une analyse de fact-checker peut porter sur une information qu'aucun article du même groupe ne reprend
+# mot pour mot. Calibré sur des données réelles (10 novembre 2026) : la similarité seule produit des faux rapprochements, d'où
+# l'exigence de mots-clés communs dans les titres.
+LINK_STRONG, LINK_WEAK = 0.40, 0.27
+
+
+def link_factchecks(conn, days=21):
+    from .seed import FACTCHECK_SOURCES
+    marks = ",".join("?" * len(FACTCHECK_SOURCES))
+    fcs = db.rows(conn, """SELECT v.id vid, t.id, t.title, t.summary, t.cluster_id FROM verdicts v JOIN articles t ON t.id=v.article_id
+                           WHERE v.origin='factcheck' AND v.active=1 AND t.published_at>=?""", (db.ago(days=days),))
+    if not fcs:
+        return 0
+    cands = db.rows(conn, f"""SELECT a.id, a.title, a.summary, a.cluster_id FROM articles a JOIN sources s ON s.id=a.source_id
+                              WHERE a.published_at>=? AND s.name NOT IN ({marks})""", (db.ago(days=days), *FACTCHECK_SOURCES))
+    vecs = {c["id"]: nlp.vector(c["title"] + " " + nlp.strip_html(c["summary"] or "")) for c in cands}
+    keys = {c["id"]: set(nlp.keywords(c["title"], 6)) for c in cands}
+    n = 0
+    with db._lock:
+        for f in fcs:
+            fv = nlp.vector(f["title"] + " " + nlp.strip_html(f["summary"] or ""))
+            fk = set(nlp.keywords(f["title"], 6))
+            for c in cands:
+                if f["cluster_id"] and c["cluster_id"] == f["cluster_id"]:
+                    continue        # même événement : déjà couvert par le verdict lui-même
+                sim = nlp.cosine(fv, vecs[c["id"]])
+                shared = len(fk & keys[c["id"]])
+                if (sim >= LINK_STRONG and shared >= 1) or (sim >= LINK_WEAK and shared >= 2):
+                    n += conn.execute("INSERT OR IGNORE INTO verdict_links(verdict_id, article_id, score) VALUES (?,?,?)",
+                                      (f["vid"], c["id"], round(sim, 3))).rowcount
+        conn.commit()
+    return n
+
+
+def related_factchecks(conn, a, limit=3):
+    """Analyses de fact-checkers sur un sujet proche (rapprochement par similarité), hors verdicts du même événement."""
+    where = "(x.cluster_id=? OR x.id=?)" if a.get("cluster_id") else "x.id=?"
+    params = (a["cluster_id"], a["id"]) if a.get("cluster_id") else (a["id"],)
+    rows = db.rows(conn, f"""SELECT v.id, v.verdict, v.checker, v.url, v.claim, MAX(l.score) score FROM verdict_links l
+                             JOIN verdicts v ON v.id=l.verdict_id JOIN articles x ON x.id=l.article_id
+                             WHERE v.active=1 AND {where} GROUP BY v.id ORDER BY score DESC LIMIT ?""", (*params, limit))
+    for r in rows:
+        r["label"] = VERDICT_LABEL[r["verdict"]]
+    return rows
+
+
+# Conclusion de la vérification : Prisme confirme ou infirme à partir du fact-checking et du recoupement, en donnant toujours
+# la base de sa conclusion.
+CONCLUSION_LABEL = {"confirmee": "Information confirmée", "infirmee": "Information infirmée", "trompeuse": "Information trompeuse",
+                    "contestee": "Information contestée", "non_confirmee": "Pas encore confirmée"}
+
+
+def conclusion(a, verdicts):
+    """a : article décoré (statut, sources fiables, fraîcheur, signalements) ; verdicts : verdicts du même événement."""
+    decisive = next((v for v in verdicts if v["verdict"] != "analyse"), None)
+    if decisive:
+        who = "la rédaction Prisme" if decisive["origin"] == "redaction" else decisive["checker"]
+        code = {"faux": "infirmee", "trompeur": "trompeuse", "vrai": "confirmee"}[decisive["verdict"]]
+        basis = (f"Démentie par {who}." if code == "infirmee" else f"Jugée trompeuse par {who}." if code == "trompeuse"
+                 else f"Confirmée par {who}.")
+        return {"code": code, "label": CONCLUSION_LABEL[code], "basis": basis, "by": "fact-checking"}
+    if a["verification_status"] == "conteste":
+        return {"code": "contestee", "label": CONCLUSION_LABEL["contestee"], "by": "recoupement",
+                "basis": f"{a.get('verification_label') or 'Désaccord entre sources'} : les médias ne rapportent pas la même version."}
+    n = a.get("reliable_sources") or 0
+    fresh = a.get("freshness") or {}
+    if n >= CROSS_TARGET and not fresh.get("recirculating") and not a.get("reports_count"):
+        return {"code": "confirmee", "label": CONCLUSION_LABEL["confirmee"], "by": "recoupement",
+                "basis": f"Recoupée par {n} sources fiables indépendantes, sans démenti ni écart de chiffres."}
+    why = ("ancienne information qui recircule" if fresh.get("recirculating") else
+           "signalement en cours d'examen" if a.get("reports_count") else f"{n} source(s) fiable(s) sur les {CROSS_TARGET} nécessaires")
+    return {"code": "non_confirmee", "label": CONCLUSION_LABEL["non_confirmee"], "by": "recoupement",
+            "basis": f"Aucun fact-checker ne l'a encore traitée et le recoupement est incomplet : {why}."}
+
+
+# =====================================================================
+#  MÉDIAS EN PROGRESSION (influence)
+# =====================================================================
+INFLUENCE_WEIGHTS = {"first": 4, "followers": 1, "events": 1, "shares": 0.5, "favorites": 1, "new_subscribers": 3, "views": 0.02}
+INFLUENCE_LABEL = {"first": "Premier à publier", "followers": "Repris ensuite par d'autres médias", "events": "Événements couverts à plusieurs",
+                   "shares": "Partages", "favorites": "Mis en favoris", "new_subscribers": "Nouveaux abonnés", "views": "Lectures sur Prisme"}
+
+
+def _influence_window(arts, cluster_first, cluster_pubs, favs, subs, start, end):
+    out = defaultdict(lambda: Counter())
+    for a in arts:
+        if not (start <= (a["published_at"] or "") < end):
+            continue
+        m = out[a["pub"]]
+        m["articles"] += 1
+        m["views"] += a["views"]
+        m["shares"] += a["shares"]
+        m["favorites"] += favs.get(a["id"], 0)
+        cid = a["cluster_id"]
+        if cid and len(cluster_pubs[cid]) > 1:
+            m["events"] += 1
+            first_pub, first_date = cluster_first[cid]
+            if first_pub == a["pub"] and a["published_at"] == first_date:
+                m["first"] += 1
+                m["followers"] += len(cluster_pubs[cid]) - 1
+    for pub, n in subs.items():
+        out[pub]["new_subscribers"] += sum(1 for d in n if start <= d < end)
+    return out
+
+
+def influence(conn, days=7):
+    """Score d'influence par média sur la période et sur la période précédente : qui fixe l'agenda (premier à publier, repris
+    ensuite), qui couvre les événements importants, ce que les lecteurs de Prisme lisent, partagent et suivent."""
+    now = db.now()
+    cur_start, prev_start, end = db.to_str(now - timedelta(days=days)), db.to_str(now - timedelta(days=2 * days)), db.to_str(now + timedelta(minutes=1))
+    arts = db.rows(conn, """SELECT a.id, a.cluster_id, a.published_at, a.views, a.shares, COALESCE(s.publisher, s.name) pub
+                            FROM articles a JOIN sources s ON s.id=a.source_id WHERE s.active=1 AND a.published_at>=?""", (prev_start,))
+    # Un flux RSS ne contient que ses derniers articles : sans collecte pendant toute la période précédente, celle-ci paraîtrait
+    # vide et tout le monde semblerait progresser. La comparaison n'est faite que si Prisme collectait déjà à ce moment-là.
+    first_seen = db.scalar(conn, "SELECT MIN(first_seen_at) FROM articles")
+    cluster_first, cluster_pubs = {}, defaultdict(set)
+    for a in sorted(arts, key=lambda x: x["published_at"] or ""):
+        if a["cluster_id"]:
+            cluster_pubs[a["cluster_id"]].add(a["pub"])
+            cluster_first.setdefault(a["cluster_id"], (a["pub"], a["published_at"]))
+    favs = Counter(r[0] for r in conn.execute("SELECT article_id FROM favorites"))
+    subs = defaultdict(list)
+    for pub, d in conn.execute("SELECT publisher, created_at FROM subscriptions"):
+        subs[pub].append(d)
+    total_subs = {p: len(v) for p, v in subs.items()}
+    cur = _influence_window(arts, cluster_first, cluster_pubs, favs, subs, cur_start, end)
+    prev = _influence_window(arts, cluster_first, cluster_pubs, favs, subs, prev_start, cur_start)
+    score = lambda m: round(sum(m[k] * w for k, w in INFLUENCE_WEIGHTS.items()), 1)
+    comparable = bool(first_seen) and first_seen <= prev_start
+    rows = []
+    for pub in set(cur) | set(prev):
+        s_cur, s_prev = score(cur[pub]), score(prev[pub])
+        growth = round(s_cur - s_prev, 1)
+        rising = comparable and s_cur >= 8 and growth > 0 and (s_prev == 0 or growth / s_prev >= 0.25)
+        rows.append({"publisher": pub, "score": s_cur, "previous": s_prev, "growth": growth,
+                     "growth_pct": None if not s_prev else round(100 * growth / s_prev), "rising": rising, "newcomer": rising and s_prev == 0,
+                     "subscribers": total_subs.get(pub, 0), "articles": cur[pub]["articles"],
+                     "components": [{"key": k, "label": INFLUENCE_LABEL[k], "value": cur[pub][k], "points": round(cur[pub][k] * w, 1)} for k, w in INFLUENCE_WEIGHTS.items()]})
+    rows.sort(key=(lambda r: (not r["rising"], -r["growth"], -r["score"])) if comparable else (lambda r: -r["score"]))
+    history_days = (now - db.parse(first_seen)).days if first_seen else 0
+    return {"days": days, "items": rows, "history_days": history_days, "comparable": comparable,
+            "weights": [{"key": k, "label": INFLUENCE_LABEL[k], "weight": w} for k, w in INFLUENCE_WEIGHTS.items()]}
+
+
 def _search(prefix, q):
     return "https://www.google.com/search?q=" + urllib.parse.quote(f"{prefix} {q}")
 
@@ -467,7 +613,8 @@ def check_article(conn, a):
     me = cred.get(pub) or {"criteria": [], "met": 0, "total": 6, "reliable": False, "statut": "", "website": None, "country": None, "kind": "", "is_demo": a.get("is_demo")}
     has_link = bool(a.get("url"))
     step1 = {"key": "source", "title": "Vérifier la source", "ok": bool(me["criteria"] and me["criteria"][0]["ok"]) and (has_link or bool(a.get("is_demo"))),
-             "facts": [["Média", a["source_name"]], ["Statut", me["statut"] or "Non renseigné"], ["Pays", me["country"] or "Non renseigné"],
+             "facts": [["Média", a["source_name"]], ["Statut", me["statut"] or "Non renseigné"], ["Annuaire officiel", me.get("registry") or "Non référencé dans les annuaires consultés"],
+                       ["Pays", me["country"] or "Non renseigné"],
                        ["Site officiel", me["website"] or "Non renseigné"], ["Auteur", a.get("author") or "Non signé dans le flux"]],
              "original": a.get("url"),
              "detail": "Média identifié, article original accessible." if has_link else "Contenu fictif de démonstration : pas d'article original."}
@@ -506,10 +653,13 @@ def check_article(conn, a):
     if img.lower().startswith(("http://", "https://")):
         tools += [{"label": "Origine de la photo (Google Lens)", "url": "https://lens.google.com/uploadbyurl?url=" + urllib.parse.quote(img, safe="")},
                   {"label": "Origine de la photo (TinEye)", "url": "https://tineye.com/search?url=" + urllib.parse.quote(img, safe="")}]
+    for r in related_factchecks(conn, a):
+        checks.append({"label": "Fact-check sur un sujet proche", "ok": True, "url": r["url"],
+                       "detail": f"{r['checker']} : « {r['claim']} ». Rapproché par similarité du texte : vérifiez qu'il s'agit bien de la même information."})
     step4 = {"key": "authentification", "title": "Authentifier l'information", "ok": all(c["ok"] for c in checks), "checks": checks, "tools": tools,
              "detail": "Aucun signal d'alerte : vérifiez tout de même les sources primaires citées." if all(c["ok"] for c in checks) else "Au moins un signal d'alerte : prudence avant de partager."}
     steps = [step1, step2, step3, step4]
-    return {"steps": steps, "passed": sum(1 for s in steps if s["ok"]), "total": len(steps)}
+    return {"steps": steps, "passed": sum(1 for s in steps if s["ok"]), "total": len(steps), "conclusion": conclusion(a, verdicts_for(conn, a))}
 
 
 # =====================================================================
@@ -824,6 +974,7 @@ def decorate(conn, a, now=None):
     a["verification_label"] = status_label(a["verification_status"], a.get("source_count"), a.get("status_reason"), a["reliable_sources"])
     v = verdicts_for(conn, a)
     a["verdict"] = {k: v[0][k] for k in ("verdict", "label", "origin", "checker")} if v else None
+    a["conclusion"] = conclusion(a, v)
     a.pop("content", None)
     a["summary"] = nlp.strip_html(a.get("summary") or "")[:320]
     return a

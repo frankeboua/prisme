@@ -73,7 +73,9 @@ CREATE TABLE IF NOT EXISTS sources (
     is_demo            INTEGER NOT NULL DEFAULT 0,
     active             INTEGER NOT NULL DEFAULT 1,
     last_fetched_at    TEXT,
-    last_error         TEXT
+    last_error         TEXT,
+    fetch_method       TEXT    NOT NULL DEFAULT 'rss' CHECK (fetch_method IN ('rss','scrape')),
+    scrape_pattern     TEXT                       -- scraping : motif des adresses d'articles sur la page de liste (feed_url)
 );
 
 -- ---------------------------------------------------------------------
@@ -223,6 +225,14 @@ CREATE TABLE IF NOT EXISTS verdicts (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_article ON verdicts(article_id);
+
+-- Analyse d'un fact-checker rapprochée d'un article d'un autre événement par similarité du texte (sujet proche).
+CREATE TABLE IF NOT EXISTS verdict_links (
+    verdict_id  INTEGER NOT NULL REFERENCES verdicts(id) ON DELETE CASCADE,
+    article_id  INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    score       REAL    NOT NULL,
+    PRIMARY KEY (verdict_id, article_id)
+);
 
 -- Médias masqués par un lecteur : leurs articles n'apparaissent plus dans ses fils (la recherche les montre toujours).
 CREATE TABLE IF NOT EXISTS hidden_sources (

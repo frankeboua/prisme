@@ -128,9 +128,15 @@ const STATUS = {
   verifie: ["b-ok", "layers", "Repris par 3 sources ou plus"], partiel: ["b-info", "layers", "Repris par 2 sources"],
   non_verifie: ["", "user", "Source unique"], conteste: ["b-warn", "alert", "Désaccord entre sources"], en_attente: ["", "clock", "En attente"],
 };
-const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture observée. Prisme ne certifie pas les faits : voir Notre méthode.">${ico(i)}${esc(label || l)}</span>`; };
+const statusBadge = (s, label) => { const [c, i, l] = STATUS[s] || STATUS.en_attente; return `<span class="badge ${c}" title="Couverture : combien de médias traitent ce sujet. Le résultat de la vérification figure en tête de l'article.">${ico(i)}${esc(label || l)}</span>`; };
 const pubOf = (a) => a.source_publisher || a.source_name;
 const VERDICT = { vrai: ["b-ok", "check"], faux: ["b-bad", "x"], trompeur: ["b-warn", "alert"], analyse: ["b-info", "shield"] };
+const CONCL = { confirmee: ["b-ok", "check", "Confirmée"], infirmee: ["b-bad", "x", "Infirmée"], trompeuse: ["b-warn", "alert", "Trompeuse"],
+  contestee: ["b-warn", "alert", "Contestée"], non_confirmee: ["", "clock", "Pas encore confirmée"] };
+const conclusionBadge = (c, all) => c && (all || c.code !== "non_confirmee") ? `<span class="badge ${CONCL[c.code][0]}" title="${esc(c.basis)}">${ico(CONCL[c.code][1])}${CONCL[c.code][2]}</span>` : "";
+const conclusionBox = (c, id) => c ? `<div class="conclusion c-${c.code}"><div class="verdict-head">${ico(CONCL[c.code][1])}<b>${esc(c.label.toUpperCase())}</b>
+  <span class="small">${c.by === "fact-checking" ? "selon le fact-checking" : "selon le recoupement des sources"}</span></div><p>${esc(c.basis)}</p>
+  ${id ? `<button class="linklike small" data-act="tool" data-tool="check">Voir la vérification en 4 étapes</button>` : ""}</div>` : "";
 const checkerName = (v) => v.origin === "redaction" ? "la rédaction Prisme" : v.checker;
 const verdictBadge = (v) => v ? `<span class="badge ${VERDICT[v.verdict][0]}" title="Selon ${esc(checkerName(v))}">${ico(VERDICT[v.verdict][1])}${{ analyse: "Analysé par un fact-checker", faux: `Démenti par ${esc(checkerName(v))}`, trompeur: `Trompeur selon ${esc(checkerName(v))}`, vrai: `Confirmé par ${esc(checkerName(v))}` }[v.verdict]}</span>` : "";
 function verdictBox(v, admin) {
@@ -168,7 +174,7 @@ function navItems() {
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
     ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
     ["Prisme"],
-    ["/sources", "db", "Médias suivis"], ["/methode", "shield", "Notre méthode"], ...(admin ? [["/admin", "chart", "Administration"]] : []),
+    ["/sources", "db", "Médias suivis"], ["/influence", "trend", "Médias en progression"], ["/methode", "shield", "Notre méthode"], ...(admin ? [["/admin", "chart", "Administration"]] : []),
     ["/parametres", "gear", "Paramètres et accessibilité"], ["/avis", "users", "Donner mon avis"], ["/projet", "info", "Le projet"],
   ];
 }
@@ -221,7 +227,7 @@ function card(a) {
   return `<article class="card" data-id="${a.id}" data-pub="${esc(pubOf(a))}">
     <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
     <div class="card-body">
-      <div class="row" style="gap:6px 10px">${catBadge(a)}${verdictBadge(a.verdict)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
+      <div class="row" style="gap:6px 10px">${catBadge(a)}${conclusionBadge(a.conclusion)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
       <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>
       ${a.freshness && a.freshness.recirculating ? `<div class="alert-line warn small">${ico("alert")}<span>${esc(a.freshness.warning)}</span></div>` : ""}
       ${a.correction_note ? `<div class="alert-line ok small">${ico("check")}<span>Correction publiée suite à un signalement.</span></div>` : ""}
@@ -305,7 +311,7 @@ function leadStory(a) {
   const n = mediaCount(a);
   return `<article class="lead-story">
     <a class="frame" href="/article/${a.id}" tabindex="-1" aria-hidden="true">${picture(a, true)}</a>
-    <div class="row" style="gap:6px 10px">${catBadge(a)}${verdictBadge(a.verdict)}${freshBadge(a.freshness)}</div>
+    <div class="row" style="gap:6px 10px">${catBadge(a)}${conclusionBadge(a.conclusion)}${freshBadge(a.freshness)}</div>
     <h2 class="lead-title"><a href="/article/${a.id}">${esc(a.title)}</a></h2>
     <p class="sum">${esc(a.summary)}</p>
     <div class="row">${byline(a)}${a.others && a.others.length ? `<a href="/sujet/${a.cluster_id}" class="small" style="font-weight:600">${spectre(n)} Comparer</a>` : ""}</div>
@@ -325,6 +331,18 @@ async function loadLocalBox() {
   box.innerHTML = `<div class="sec-title"><h2>${ico("globe")} Près de chez vous : ${esc(country)}</h2><small><a href="/local?pays=${encodeURIComponent(country)}">Toute l'actualité locale</a></small></div>
     <div class="topics">${d.items.map((a) => `<article class="topic"><div class="row" style="justify-content:space-between"><span class="kicker">${esc(a.source_name)}</span>${mediaCount(a) > 1 ? spectre(mediaCount(a)) : ""}</div>
       <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3><div class="byline">${when(a.published_at)}</div>${mediaCount(a) > 1 ? `<a class="go" href="/sujet/${a.cluster_id}">Comparer les ${mediaCount(a)} médias</a>` : ""}</article>`).join("")}</div>`;
+}
+async function loadInfluenceBox() {
+  const d = await get("/api/influence?days=7").catch(() => null);
+  const rail = $("#rail");
+  if (!d || !rail) return;
+  const top = d.items.filter((r) => r.rising).slice(0, 3);
+  const list = top.length ? top : d.items.slice(0, 3);
+  if (!list.length) return;
+  const el = document.createElement("div");
+  el.className = "panel";
+  el.innerHTML = `<h3>${ico("trend")} Médias en progression</h3><ol class="rank">${list.map((r) => `<li><span><b>${esc(r.publisher)}</b> <span class="small muted">${r.growth > 0 ? "▲ +" + r.growth : r.score + " pts"}</span></span></li>`).join("")}</ol><a class="small" href="/influence">Voir le classement et la méthode</a>`;
+  rail.appendChild(el);
 }
 async function loadFactBox() {
   const f = await get("/api/factcheck").catch(() => null);
@@ -352,8 +370,9 @@ async function loadHomeExtras() {
   }
   $("#rail").innerHTML = `<div class="panel"><h3>Les mots du moment</h3><ol class="rank">${t.keywords.slice(0, 8).map((k) => `<li><a href="/recherche?q=${encodeURIComponent(k.word)}">${esc(k.word)}</a></li>`).join("")}</ol></div>
     <div class="panel"><h3>Le digest du jour</h3><p class="small muted">L'essentiel en quelques minutes, à partir de plusieurs sources citées.</p><a class="btn sm" href="/digest">${ico("digest")} Lire le digest</a></div>
-    <div class="panel"><h3>Comment lire Prisme</h3><p class="small muted">Le spectre indique combien de médias couvrent un même événement. C'est une mesure de couverture, pas une preuve de véracité.</p><a class="small" href="/methode">Notre méthode</a></div>`;
+    <div class="panel"><h3>Comment lire Prisme</h3><p class="small muted">Le spectre indique combien de médias couvrent un même événement. Le badge « Confirmée » ou « Infirmée » donne le résultat de la vérification par le fact-checking et le recoupement.</p><a class="small" href="/methode">Notre méthode</a></div>`;
   loadFactBox();
+  loadInfluenceBox();
 }
 let feedOffset = 0;
 async function loadFeed(reset) {
@@ -414,6 +433,7 @@ async function pageArticle(id) {
         <button class="btn sm" data-act="reader">${ico("reader")} Mode lecture épuré</button><button class="btn sm" data-act="print">${ico("print")} Imprimer / PDF</button></div>
       <div class="row" style="gap:6px 10px;margin-bottom:10px">${catBadge(a)}${mediaBadge(a.media_type)}${freshBadge(f)}${statusBadge(a.verification_status, a.verification_label)}${demoBadge(a)}</div>
       <h1>${esc(a.title)}</h1>
+      ${conclusionBox(a.conclusion, a.id)}
       ${(a.verdicts || []).slice(0, 3).map((v) => verdictBox(v, S.user && S.user.role === "admin")).join("")}
       <div class="meta" style="margin:10px 0 16px;font-size:.88rem"><strong>${esc(a.source_name)}</strong>${a.author ? `<span>par ${esc(a.author)}</span>` : ""}
         <span>${ico("clock")} Publié le ${fmtDate(a.published_at)} (${esc(f.age)})</span><span>· Collecté le ${fmtDate(a.first_seen_at)}</span><span>· ${a.reading_time} min de lecture</span></div>
@@ -450,7 +470,8 @@ async function pageArticle(id) {
         <h3>${ico("layers")} Couverture</h3>
         <div style="margin-bottom:8px">${spectre(nSources)}</div>
         <div>${statusBadge(a.verification_status, a.verification_label)}</div>
-        <p class="small muted" style="margin:10px 0 0">Ce statut décrit combien de médias en parlent, pas si le fait est vrai. <a href="/methode">Notre méthode</a></p>
+        <div style="margin-top:8px">${conclusionBadge(a.conclusion, true)}</div>
+        <p class="small muted" style="margin:8px 0 0">${esc(a.conclusion ? a.conclusion.basis : "")} <a href="/methode">Notre méthode</a></p>
         <div class="small" style="margin-top:10px">Tonalité : <b>${esc(a.tone.label)}</b><br>Lisibilité : <b>${a.readability.score}/100</b> (${esc(a.readability.level)})</div>
       </div>
       ${a.others.length ? `<div class="panel"><h3>${ico("layers")} Même sujet ailleurs</h3>${a.others.map((o) => `<div style="margin-bottom:10px"><a href="/article/${o.id}">${esc(o.title)}</a><div class="small muted">${esc(o.source_name)} · ${when(o.published_at)}</div></div>`).join("")}<a class="btn sm" href="/sujet/${a.cluster_id}">${ico("columns")} Comparer les traitements</a></div>` : ""}
@@ -552,7 +573,8 @@ function renderCheck(box, c) {
   const link = (v) => safeUrl(v) ? `<a href="${esc(safeUrl(v))}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(v);
   box.innerHTML = `
     <div class="row between" style="margin-bottom:6px"><h3 style="margin:0">Vérifier en 4 étapes</h3><span class="badge ${c.passed === c.total ? "b-ok" : c.passed >= 2 ? "b-info" : "b-warn"}">${c.passed} étape${c.passed > 1 ? "s" : ""} validée${c.passed > 1 ? "s" : ""} sur ${c.total}</span></div>
-    <p class="small muted" style="margin-top:0">La méthode du journaliste : vérifier la source, vérifier sa crédibilité, croiser au moins trois sources fiables, puis authentifier l'information. Prisme vous aide à chaque étape ; la décision finale vous revient.</p>
+    <p class="small muted" style="margin-top:0">La méthode du journaliste : vérifier la source, vérifier sa crédibilité, croiser au moins trois sources fiables, puis authentifier l'information à l'aide du fact-checking.</p>
+    ${conclusionBox(c.conclusion)}
     <ol class="steps">
       <li class="step">${stepMark(s1.ok)}<div><h4>1. ${esc(s1.title)}</h4><dl class="facts">${s1.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${link(v)}</dd>`).join("")}</dl>
         <div class="small">${esc(s1.detail)} ${safeUrl(s1.original) ? `<a href="${esc(safeUrl(s1.original))}" target="_blank" rel="noopener">Ouvrir l'article original ${ico("ext")}</a>` : ""}</div></div></li>
@@ -583,7 +605,7 @@ function renderClaims(box, claims, a) {
         <div class="small">${esc(c.rationale)}</div>
         ${c.evidences.map((e) => `<div class="ev ${e.stance}"><b>${e.stance === "soutient" ? "Formulation proche" : e.stance === "contredit" ? "Version différente" : "Contexte"}</b> — <a href="/article/${e.article_id}">${esc(e.source_name)}</a> <span class="muted">(${fmtDate(e.published_at, false)}, similarité ${Math.round(e.similarity * 100)} %)</span><br>« ${esc(e.excerpt)} »</div>`).join("")}
       </div>`).join("") : empty("Aucune phrase de ce type dans le texte disponible : le flux fournit souvent un simple extrait.", "shield")}
-    <div class="alert-line info small" style="margin-top:12px">${ico("info")}<span>Cet outil aide à comparer, il ne remplace pas le travail d'un journaliste vérificateur. Vous avez repéré une erreur ? <a href="#" data-act="report" data-id="${a.id}">Signalez-la</a>.</span></div>`;
+    <div class="alert-line info small" style="margin-top:12px">${ico("info")}<span>Vous avez repéré une erreur ? <a href="#" data-act="report" data-id="${a.id}">Signalez-la</a>.</span></div>`;
 }
 
 async function pageCompare(cid) {
@@ -746,6 +768,29 @@ async function pageMultimedia() {
   $("#mmList").innerHTML = cards(r.items);
 }
 
+async function pageInfluence(params) {
+  const q = new URLSearchParams(params || "");
+  const days = +(q.get("jours") || 7);
+  const d = await get(`/api/influence?days=${days}`);
+  const arrow = (r) => r.growth > 0 ? `<b style="color:var(--ok)">▲ +${r.growth}</b>` : r.growth < 0 ? `<b style="color:var(--bad)">▼ ${r.growth}</b>` : "=";
+  main().innerHTML = `
+    <div class="page-head"><div><span class="kicker">Observatoire</span><h1>${ico("trend")} Médias en progression</h1>
+      <p class="lead">Les médias dont l'influence grandit : ceux qui publient les premiers sur un événement ensuite repris par d'autres, qui couvrent les sujets importants, et que les lecteurs de Prisme lisent, partagent et suivent. Le score compare les ${days} derniers jours aux ${days} jours précédents.</p></div>
+      <div class="tabs" style="margin:0">${[1, 7, 30].map((n) => `<a class="tab ${n === days ? "active" : ""}" href="/influence?jours=${n}">${n === 1 ? "24 h" : n + " jours"}</a>`).join("")}</div></div>
+    ${d.comparable ? "" : `<div class="alert-line info small" style="margin-bottom:12px">${ico("info")}<span>Historique disponible : ${d.history_days} jour(s). La comparaison avec la période précédente sera complète avec ${2 * days} jours de données ; sur l'hébergement gratuit, la base repart de zéro à chaque mise en veille.</span></div>`}
+    <div class="panel table-wrap" style="padding:0"><table class="t">
+      <thead><tr><th>Média</th><th>Score</th><th>Évolution</th><th>Premier à publier</th><th>Repris ensuite par</th><th>Événements couverts</th><th>Lectures · partages · favoris</th><th>Abonnés</th></tr></thead>
+      <tbody>${d.items.map((r) => { const c = Object.fromEntries(r.components.map((x) => [x.key, x.value])); return `<tr>
+        <td><b>${esc(r.publisher)}</b> ${r.newcomer ? `<span class="badge b-info">Nouveau venu</span>` : r.rising ? `<span class="badge b-ok">${ico("trend")}En progression</span>` : ""}</td>
+        <td title="${esc(r.components.map((x) => `${x.label} : ${x.value} (${x.points} pts)`).join("\n"))}"><b>${r.score}</b><div class="small muted">avant : ${r.previous}</div></td>
+        <td>${arrow(r)}${r.growth_pct !== null && r.growth ? `<div class="small muted">${r.growth_pct > 0 ? "+" : ""}${r.growth_pct} %</div>` : ""}</td>
+        <td>${c.first} sujet(s)</td><td>${c.followers} média(s)</td><td>${c.events}</td>
+        <td class="small">${c.views} · ${c.shares} · ${c.favorites}</td><td>${r.subscribers}${c.new_subscribers ? ` <span class="small muted">(+${c.new_subscribers})</span>` : ""}</td></tr>`; }).join("") || `<tr><td colspan="8">${empty("Pas encore assez de données.", "trend")}</td></tr>`}</tbody></table></div>
+    <h2>Comment le score est calculé</h2>
+    <p class="small">Le score additionne des faits mesurés sur la période, chacun avec un poids affiché : ${d.weights.map((w) => `${esc(w.label)} × ${w.weight}`).join(" ; ")}. « Premier à publier » compte les événements couverts par plusieurs médias où ce média a publié avant tous les autres ; « repris ensuite par » compte les médias qui ont publié après lui sur ces événements. Un média est « en progression » quand son score atteint au moins 8 et augmente d'au moins 25 % par rapport à la période précédente.</p>
+    <p class="small muted">Limites : Prisme ne mesure que les médias qu'il suit, et l'audience sur Prisme, pas l'audience réelle du média. Le score repère des tendances ; il ne juge pas la qualité d'un média, qui relève des six indicateurs de crédibilité.</p>`;
+}
+
 async function pageVerifications(params) {
   const q = new URLSearchParams(params || "");
   const filt = q.get("verdict") || "";
@@ -753,7 +798,7 @@ async function pageVerifications(params) {
   const tabs = [["", "Tout"], ["faux", "Faux"], ["trompeur", "Trompeur"], ["vrai", "Vrai"], ["analyse", "Analyses"], ["redaction", "Rédaction Prisme"]];
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("shield")} Vérification des faits</h1>
-      <p class="lead">Prisme ne décide jamais seul qu'une information est vraie ou fausse. Les verdicts ci-dessous viennent de fact-checkers professionnels, dont l'analyse est liée, ou de la rédaction Prisme, avec explication et sources. Chaque verdict s'affiche aussi sur les articles du même événement, chez tous les médias.</p></div></div>
+      <p class="lead">Prisme confirme ou infirme les informations à l'aide du fact-checking : conclusions des fact-checkers professionnels (avec le lien vers leur analyse) et verdicts de la rédaction Prisme (avec explication et sources). Chaque verdict s'applique à tout l'événement, chez tous les médias qui en parlent.</p></div></div>
     <div class="tabs">${tabs.map(([k, l]) => `<a class="tab ${filt === k ? "active" : ""}" href="/verifications${k ? `?verdict=${k}` : ""}">${l}</a>`).join("")}</div>
     <div class="panel" style="padding:6px 18px">${items.map((v) => `<div class="switch" style="align-items:flex-start">
       <div><div class="row" style="gap:6px">${verdictBadge(v)}<span class="small muted">${fmtDate(v.created_at)}</span></div>
@@ -889,12 +934,12 @@ async function pageSources() {
     <div class="panel table-wrap" style="padding:0"><table class="t">
       <thead><tr><th>Média</th><th>Type</th><th>Crédibilité</th><th>Pays</th><th>Langue</th><th>Contenus</th><th>Dernière collecte</th><th>Notifications</th>${admin ? "<th>Administration</th>" : ""}</tr></thead>
       <tbody>${list.map((s) => `<tr style="${s.active ? "" : "opacity:.5"}">
-        <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span> ${relBadge(s.reliability, s.certified, 1)}` : ""}<div class="small muted">${safeUrl(s.website) ? `<a href="${esc(safeUrl(s.website))}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note || "")}</div></td>
+        <td><b>${esc(s.name)}</b> ${s.is_demo ? `<span class="badge b-demo">Démo</span> ${relBadge(s.reliability, s.certified, 1)}` : ""}<div class="small muted">${safeUrl(s.website) ? `<a href="${esc(safeUrl(s.website))}" target="_blank" rel="noopener">${esc(s.website)}</a>` : esc(s.reliability_note || "")}</div>${s.registry ? `<span class="badge b-info" title="Référencé dans l'annuaire officiel du régulateur">${ico("check")}${esc(s.registry)}</span>` : ""}</td>
         <td>${esc(s.kind)}</td>
         <td>${s.credibility ? `<span class="badge ${s.credibility.reliable ? "b-ok" : ""}" title="${esc(s.credibility.criteria.map((c) => `${c.ok ? "Oui" : "Non"} : ${c.label} (${c.detail})`).join("\n"))}">${s.credibility.met}/${s.credibility.total}${s.credibility.reliable ? " · fiable" : ""}</span><div class="small muted">${esc(s.credibility.statut)}</div>` : "—"}</td>
         <td>${esc(s.country || "")}</td><td>${esc(s.language.toUpperCase())}</td>
         <td>${s.articles}</td>
-        <td class="small">${s.feed_url ? (s.last_fetched_at ? fmtDate(s.last_fetched_at) : "jamais") : "—"}${s.last_error ? `<div class="small" style="color:var(--bad)" title="${esc(s.last_error)}">échec de collecte</div>` : ""}</td>
+        <td class="small">${s.feed_url ? (s.last_fetched_at ? fmtDate(s.last_fetched_at) : "jamais") : "—"}${s.feed_url ? `<div class="small muted">${s.fetch_method === "scrape" ? "extraction de la page (sans RSS)" : "flux RSS"}</div>` : ""}${s.last_error ? `<div class="small" style="color:var(--bad)" title="${esc(s.last_error)}">échec de collecte</div>` : ""}</td>
         <td>${s.is_demo ? "—" : subBtn(s.id, s.publisher || s.name)}</td>
         ${admin ? `<td><div class="row"><label class="small row" style="gap:4px"><input type="checkbox" data-act="srcactive" data-id="${s.id}" ${s.active ? "checked" : ""}>active</label>${!s.is_demo ? `<button class="btn sm danger" data-act="srcdel" data-id="${s.id}" aria-label="Supprimer ${esc(s.name)}">${ico("trash")}</button>` : ""}</div></td>` : ""}
       </tr>`).join("")}</tbody></table></div>`;
@@ -904,7 +949,15 @@ function pageMethod() {
   main().innerHTML = `
     <div style="max-width:760px">
       <span class="kicker">Transparence</span><h1>Notre méthode</h1>
-      <p class="lead">Prisme mesure comment plusieurs médias couvrent un même événement. Il ne dit pas si un fait est vrai.</p>
+      <p class="lead">Prisme compare la façon dont les médias couvrent un même événement, puis vérifie l'information : il la confirme ou l'infirme à l'aide du fact-checking et du recoupement, en indiquant toujours sur quoi repose sa conclusion.</p>
+      <h2>Comment Prisme confirme ou infirme une information</h2>
+      <ol>
+        <li><b>Infirmée</b> ou <b>trompeuse</b> : un fact-checker professionnel (Franceinfo Vrai ou fake, Libération CheckNews, France 24 Les Observateurs, RFI, Le Monde Les Décodeurs) ou la rédaction Prisme l'a démentie. Le nom du vérificateur et le lien vers son analyse sont affichés.</li>
+        <li><b>Confirmée</b> : un fact-checker ou la rédaction l'a confirmée, ou bien au moins trois sources fiables indépendantes la rapportent, sans démenti, sans écart de chiffres, sans signalement en cours et sans indice d'ancienne information qui recircule.</li>
+        <li><b>Contestée</b> : les médias ne rapportent pas la même version (chiffres différents, démenti signalé).</li>
+        <li><b>Pas encore confirmée</b> : aucun fact-checker ne l'a traitée et moins de trois sources fiables la rapportent. La conclusion change dès qu'une nouvelle source ou un fact-check arrive.</li>
+      </ol>
+      <p>Une analyse de fact-checker rapprochée par la seule similarité du texte apparaît comme « fact-check sur un sujet proche » : elle ne suffit pas à infirmer une information.</p>
       <h2>La vérification en quatre étapes</h2>
       <p>Chaque article propose l'onglet « Vérifier en 4 étapes », qui suit la méthode du journaliste.</p>
       <ol>
@@ -916,8 +969,8 @@ function pageMethod() {
       <h2>Ce que signifient les statuts</h2>
       <dl class="facts" style="grid-template-columns:minmax(120px,190px) 1fr;gap:10px 16px;font-size:.95rem;margin-bottom:22px">
         <dt><b>Source unique</b></dt><dd>Un seul média suivi par Prisme en parle pour l'instant. Cela ne veut pas dire que l'information est fausse.</dd>
-        <dt><b>Recoupé par N sources fiables</b></dt><dd>Au moins trois médias distincts, chacun remplissant au moins quatre indicateurs de crédibilité, traitent le même événement. C'est la règle du recoupement ; ce n'est pas une certification.</dd>
-        <dt><b>Repris par N sources</b></dt><dd>N médias distincts publient sur le même événement. Ils peuvent tous reprendre une même dépêche : ce n'est donc pas une preuve.</dd>
+        <dt><b>Recoupé par N sources fiables</b></dt><dd>Au moins trois médias distincts, chacun remplissant au moins quatre indicateurs de crédibilité, traitent le même événement. C'est la règle du recoupement : sans démenti ni écart de chiffres, elle permet de conclure « Information confirmée ».</dd>
+        <dt><b>Repris par N sources</b></dt><dd>N médias distincts publient sur le même événement. Ils peuvent tous reprendre une même dépêche : c'est pourquoi seules les sources fiables comptent pour confirmer.</dd>
         <dt><b>Chiffres divergents</b></dt><dd>Des médias donnent des chiffres différents pour une même donnée. Un bilan peut aussi simplement évoluer dans le temps.</dd>
         <dt><b>Démenti signalé</b></dt><dd>Un média suivi emploie un vocabulaire de démenti sur ce sujet. Lisez les sources pour juger.</dd>
       </dl>
@@ -1572,7 +1625,7 @@ const ROUTES = [
   [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
   [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
-  [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/verifications\??(.*)/, pageVerifications, "Vérification des faits"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
+  [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/influence\??(.*)/, pageInfluence, "Médias en progression"], [/^\/verifications\??(.*)/, pageVerifications, "Vérification des faits"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
   [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
 async function route() {

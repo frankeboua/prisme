@@ -58,6 +58,9 @@ python tests/e2e.py http://127.0.0.1:8765 demo captures   # navigateur réel (Pl
 | Ensuite | **Signalement d'erreurs** + modération + correction publiée + notification du lecteur + journal des modifications | Drapeau, *Signalements*, *Administration* |
 | Ensuite | **Notifications personnalisées** par mots-clés (+ notifications du navigateur) | Cloche, *Veille & alertes* |
 | Ensuite | **Abonnements aux médias** : notification à chaque nouvel article d'un média suivi (tous ses flux) | Bouton « S'abonner » (article, *Médias suivis*), *Veille & alertes* |
+| Très important | **Conclusion de vérification** sur chaque information : confirmée, infirmée, trompeuse, contestée ou pas encore confirmée, avec sa base (fact-checker, rédaction ou recoupement par 3 sources fiables) | Badge sur les cartes, encadré en tête de l'article, onglet 4 étapes |
+| Ensuite | **Web scraping** des médias sans flux RSS (Fraternité Matin, Le Patriote, Le Débat Ivoirien), respect de robots.txt, métadonnées seulement, lien vers l'original ; médias des annuaires officiels ANP et HACA | *Médias suivis* (badges d'annuaire) |
+| Ensuite | **Médias en progression** : score d'influence (premier à publier, repris ensuite, événements couverts, audience Prisme, abonnés) comparé à la période précédente | Page */influence*, encadré de l'accueil |
 | Très important | **Vérification des faits** : verdicts vrai / faux / trompeur des fact-checkers (Franceinfo Vrai ou fake, Libération CheckNews, France 24 Les Observateurs, RFI, Le Monde Les Décodeurs) relayés sur tout l'événement, verdicts de la rédaction (explication + sources obligatoires), lecteurs prévenus | Encadrés sur l'article, page *Vérification des faits*, étape 4 |
 | Ensuite | Rubrique **Religion** (Vatican News, Réforme, Saphirnews et classement par mots-clés) | Barre des rubriques |
 | Ensuite | **Édition locale** « Près de chez vous » (pays du lecteur, Côte d'Ivoire par défaut) | Accueil, page */local* |

@@ -453,3 +453,14 @@ body { overflow-wrap: break-word; }
 img, video, iframe, svg { max-width: 100%; }
 .rubrics { justify-content: safe center; overscroll-behavior-x: contain; }
 .table-wrap { overscroll-behavior-x: contain; }
+
+/* Conclusion de la vérification (confirmée, infirmée…) */
+.conclusion { border: 1px solid var(--border); border-left: 6px solid var(--muted); border-radius: 10px; padding: 12px 14px; margin: 12px 0; background: var(--neutral-bg); }
+.conclusion p { margin: 6px 0 4px; }
+.conclusion .verdict-head b:first-of-type { font-size: 1.05rem; letter-spacing: .02em; }
+.conclusion.c-confirmee { border-left-color: var(--ok); background: var(--ok-bg); }
+.conclusion.c-infirmee { border-left-color: var(--bad); background: var(--bad-bg); }
+.conclusion.c-trompeuse, .conclusion.c-contestee { border-left-color: var(--warn); background: var(--warn-bg); }
+.conclusion.c-confirmee .verdict-head svg, .conclusion.c-confirmee .verdict-head b:first-of-type { color: var(--ok); }
+.conclusion.c-infirmee .verdict-head svg, .conclusion.c-infirmee .verdict-head b:first-of-type { color: var(--bad); }
+.conclusion.c-trompeuse .verdict-head b:first-of-type, .conclusion.c-contestee .verdict-head b:first-of-type { color: var(--warn); }
