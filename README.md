@@ -1,7 +1,6 @@
 # PRISME — Agrégateur intelligent des nouveaux médias
 
-**École Supérieure Africaine des TIC (ESATIC) — Licence 3 TWIN — Projet de Community Management**
-Groupe 7 : Eboua Franck · Kah Toily · Yao Francklin — Encadrant : M. Cédric Cissé
+**École Supérieure Africaine des TIC (ESATIC) — Licence 3 TWIN — Projet de Community Management** Eboua Franck  — Encadrant : M. Cédric Cissé
 
 > « L'information sous tous ses angles. »
 > Prisme agrège les médias dans un fil unique, regroupe les doublons, compare la façon dont chaque média traite un même événement, indique la fraîcheur de l'information et explique chacune de ses recommandations. Il mesure la couverture d'un événement : il ne certifie pas les faits.
