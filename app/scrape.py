@@ -64,7 +64,10 @@ def article_links(listing_html, listing_url, pattern):
         if rx.search(urllib.parse.urlparse(url).path):
             seen.add(url)
             out.append(url)
-    return out
+    # Quand l'adresse contient la date (/2026/11/14/…), les articles les plus récents passent en premier :
+    # certaines pages d'accueil mettent en avant d'anciens articles.
+    dated = lambda u: (m.group(0) if (m := re.search(r"/(20\d\d)/(\d\d)/(\d\d)/", u)) else "")
+    return sorted(out, key=dated, reverse=True) if any(dated(u) for u in out) else out
 
 
 def _meta(page, *names):
@@ -134,8 +137,11 @@ def parse_article(page, url):
     if not date:
         m = re.search(r'<time[^>]+datetime="([^"]+)"', page)
         date = m.group(1) if m else ""
+    author = (ld.get("author") or _meta(page, "author", "article:author") or "").strip()
+    if re.fullmatch(r"(?i)[a-z0-9_.-]*(?:admin|webmaster|editor|user)[a-z0-9_.-]*", author):
+        author = ""     # identifiant technique (« admin », « ladminassop »…) : ce n'est pas une signature de journaliste
     return {"guid": url, "title": nlp.strip_html(title)[:400], "summary": nlp.strip_html(summary)[:1500], "content": "",
-            "url": rss.safe_url(url), "author": (ld.get("author") or _meta(page, "author", "article:author") or "")[:120],
+            "url": rss.safe_url(url), "author": author[:120],
             "published_at": rss._date(date), "image_url": rss.safe_url(ld.get("image") or _meta(page, "og:image", "twitter:image")),
             "media_url": None, "media_kind": None, "duration": None}
 

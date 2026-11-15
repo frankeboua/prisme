@@ -399,11 +399,11 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 56)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 3 médias collectés par extraction
-        self.assertEqual(st["real_sources"], 33)
+        self.assertEqual(feeds, 57)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 4 médias collectés par extraction
+        self.assertEqual(st["real_sources"], 34)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 18)
-        self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 3)
+        self.assertEqual(ivoirians, 19)
+        self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 4)
 
 
 class Video(Case):
@@ -979,6 +979,12 @@ class Extraction(unittest.TestCase):
         self.assertEqual(links, ["https://www.exemple-presse.ci/article/12/politique/le-gouvernement-adopte-un-plan",
                                  "https://www.exemple-presse.ci/article/13/economie/le-cacao-atteint-un-prix-record"])
 
+    def test_dated_links_newest_first(self):
+        page = '<a href="/2024/01/08/un-ancien-article-mis-en-avant/">a</a><a href="/2026/11/14/le-dernier-article-du-jour/">b</a>'
+        links = self.scrape.article_links(page, "https://www.nasopresse.com/", r"^/20\d\d/\d\d/\d\d/[a-z0-9%-]{10,}$")
+        self.assertEqual(links, ["https://www.nasopresse.com/2026/11/14/le-dernier-article-du-jour",
+                                 "https://www.nasopresse.com/2024/01/08/un-ancien-article-mis-en-avant"])
+
     def test_parse_article_metadata_and_excerpt(self):
         it = self.scrape.parse_article(ARTICLE, "https://www.exemple-presse.ci/article/13/economie/le-cacao-atteint-un-prix-record")
         self.assertEqual(it["title"], "Le cacao atteint un prix record")
@@ -987,6 +993,8 @@ class Extraction(unittest.TestCase):
         self.assertIn("ministre de l'Agriculture", it["summary"])                    # paragraphe non fermé lu quand même
         self.assertEqual(it["content"], "")                                         # l'article n'est pas recopié
         self.assertEqual(it["image_url"], "https://www.exemple-presse.ci/img/cacao.jpg")
+        self.assertEqual(self.scrape.parse_article(ARTICLE.replace("Awa Koné", "ladminassop"), "https://x.ci/a")["author"], "")
+        self.assertEqual(self.scrape.parse_article(ARTICLE.replace("Awa Koné", "AFP"), "https://x.ci/a")["author"], "AFP")
 
     def test_collect_respects_robots_and_known_urls(self):
         import urllib.robotparser

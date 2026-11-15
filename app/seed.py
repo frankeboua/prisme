@@ -86,6 +86,7 @@ SCRAPED_SOURCES = [
     ("Fraternité Matin", "https://www.fratmat.info", "https://www.fratmat.info/", "Côte d'Ivoire", "fr", "presse", None, r"^/article/\d+/[a-z0-9-]+/[a-z0-9-]+$"),
     ("Le Patriote", "https://lepatriote.ci", "https://lepatriote.ci/", "Côte d'Ivoire", "fr", "presse", "politique", r"^/(?!le-patriote-n)[a-z0-9]+(?:-[a-z0-9]+){4,}$"),
     ("Le Débat Ivoirien", "https://www.ledebativoirien.net", "https://www.ledebativoirien.net/", "Côte d'Ivoire", "fr", "web", None, r"^/article/[a-z0-9-]{15,}$"),
+    ("Nasopresse", "https://www.nasopresse.com", "https://www.nasopresse.com/", "Côte d'Ivoire", "fr", "tv", None, r"^/20\d\d/\d\d/\d\d/[a-z0-9%-]{10,}$"),
 ]
 
 # Référencement dans les annuaires officiels des régulateurs (relevé le 11 novembre 2026) :
@@ -96,7 +97,7 @@ SOURCE_REGISTRY = {
     "Artici": "Annuaire ANP (presse numérique)", "Le Point Sur": "Annuaire ANP (presse numérique)",
     "Cacao Café News": "Annuaire ANP (presse numérique)", "Le Débat Ivoirien": "Annuaire ANP (presse numérique)",
     "Fraternité Matin": "Annuaire ANP (presse numérique)", "Le Patriote": "Annuaire ANP (presse)",
-    "7info": "Répertoire HACA (web TV)", "RTI Info": "Répertoire HACA (télévision publique)",
+    "7info": "Répertoire HACA (web TV)", "Nasopresse": "Répertoire HACA (web TV)", "RTI Info": "Répertoire HACA (télévision publique)",
 }
 
 # Flux de fact-checking. True : rubrique entièrement consacrée à la vérification (chaque article est une analyse) ;
@@ -141,6 +142,7 @@ SOURCE_PROFILES = {
     "Artici": "Site d'information ivoirien",
     "Le Point Sur": "Site d'information ivoirien",
     "Cacao Café News": "Site d'information ivoirien spécialisé (café-cacao)",
+    "Nasopresse": "Web TV et site d'information ivoirien",
 }
 
 DEMO_NOTE = "Source fictive créée pour la démonstration pédagogique (aucun lien avec un média réel)."
