@@ -3,7 +3,7 @@
 **École Supérieure Africaine des TIC (ESATIC) — Licence 3 TWIN — Projet de Community Management** Eboua Franck  — Encadrant : M. Cédric Cissé
 
 > « L'information sous tous ses angles. »
-> Prisme agrège les médias dans un fil unique, regroupe les doublons, compare la façon dont chaque média traite un même événement, indique la fraîcheur de l'information et explique chacune de ses recommandations. Il mesure la couverture d'un événement : il ne certifie pas les faits.
+> Prisme agrège les médias dans un fil unique, regroupe les doublons, compare la façon dont chaque média traite un même événement, indique la fraîcheur de l'information et explique chacune de ses recommandations. Il confirme ou infirme les informations à l'aide du fact-checking et du recoupement, en affichant toujours la base de sa conclusion.
 
 Deux modes de fonctionnement :
 
