@@ -183,6 +183,7 @@ function renderNav() {
   $("#nav").innerHTML = navItems().map((n) => n.length === 1 ? `<div class="nav-sec">${n[0]}</div>` :
     `<a class="nav-a ${(cur === n[0] || (n[0] !== "/" && cur.startsWith(n[0]))) ? "active" : ""}" href="${n[0]}" ${cur === n[0] ? 'aria-current="page"' : ""}>${ico(n[1])}<span>${n[2]}</span>${n[3] ? `<span class="count">${n[3]}</span>` : ""}</a>`).join("");
   $$("#rubrics a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === cur));
+  if (renderNav.last !== cur) { renderNav.last = cur; $("#rubrics a.active")?.scrollIntoView({ block: "nearest", inline: "nearest" }); }   // seulement au changement de page
   $("#notifBtn").innerHTML = ico("bell") + (S.unread ? `<span class="dot">${S.unread > 99 ? "99+" : S.unread}</span>` : "");
   $("#refreshBtn").hidden = !(S.user && S.user.role === "admin");
   $("#userBox").innerHTML = S.user
@@ -588,7 +589,7 @@ function renderCheck(box, c) {
       <li class="step">${stepMark(s4.ok)}<div><h4>4. ${esc(s4.title)}</h4>${critList(s4.checks, "alert")}
         ${fc && fc.length ? `<b class="small">Vérifications publiées par des fact-checkeurs</b><ul class="small">${fc.map((f) => `<li><a href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">${esc(f.publisher || "Fact-checking")}</a> : <b>${esc(f.rating || "")}</b> · « ${esc(f.claim)} »</li>`).join("")}</ul>` : fc ? `<div class="small muted">Aucune vérification publiée trouvée par Google Fact Check pour ce sujet.</div>` : ""}
         <div class="small" style="margin-top:8px"><b>Contrôler par soi-même :</b></div>
-        <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px">${s4.tools.map((t) => `<a class="btn sm" href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">${ico("ext")} ${esc(t.label)}</a>`).join("")}</div>
+        <div class="check-tools">${s4.tools.map((t) => `<a class="btn sm" href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">${ico("ext")} ${esc(t.label)}</a>`).join("")}</div>
         <div class="small muted" style="margin-top:8px">${esc(s4.detail)}</div></div></li>
     </ol>`;
 }
@@ -1662,9 +1663,156 @@ async function endSplash() {
   setTimeout(() => { sp.remove(); document.body.classList.remove("assemble"); }, 1300);
 }
 
+// ====================================================================
+//  Listes de choix personnalisées : le <select> natif reste en place (formulaires, événements),
+//  un bouton et une liste aux couleurs de Prisme le remplacent à l'écran
+// ====================================================================
+const CSEL = { sel: null, btn: null, active: -1, items: [] };
+const cselMobile = () => matchMedia("(max-width: 640px), (pointer: coarse)").matches;
+const cselLabel = (sel) => {
+  const lab = sel.labels && sel.labels[0];
+  if (!lab) return sel.getAttribute("aria-label") || "";
+  const span = lab.querySelector(":scope > span");
+  if (span && lab.contains(sel)) return span.textContent.trim();
+  const c = lab.cloneNode(true);
+  c.querySelectorAll("select").forEach((x) => x.remove());
+  return c.textContent.trim();
+};
+function cselSync(sel) {
+  const btn = sel._cbtn;
+  if (!btn) return;
+  const o = sel.options[sel.selectedIndex];
+  btn.querySelector(".csel-val").textContent = o ? o.text : "";
+  btn.classList.toggle("placeholder", !!o && o.value === "");
+  btn.setAttribute("aria-label", `${sel._clabel ? sel._clabel + " : " : ""}${o ? o.text : ""}`);
+  btn.disabled = sel.disabled;
+}
+function enhanceSelect(sel) {
+  if (sel._cbtn || sel.multiple) return;
+  sel._clabel = cselLabel(sel);
+  const wrap = document.createElement("span");
+  wrap.className = "csel";
+  if (sel.style.width) { wrap.style.width = sel.style.width; sel.style.width = ""; }
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "csel-btn";
+  btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
+  btn.innerHTML = `<span class="csel-val"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.append(btn, sel);   // le bouton d'abord : un clic sur l'étiquette l'active
+  sel.classList.add("csel-native");
+  sel.tabIndex = -1;
+  sel.setAttribute("aria-hidden", "true");
+  if (sel._clabel && !sel.getAttribute("aria-label")) sel.setAttribute("aria-label", sel._clabel);   // l'étiquette englobante désigne désormais le bouton
+  sel._cbtn = btn;
+  btn._csel = sel;
+  btn.onclick = () => cselOpen(sel);
+  btn.onkeydown = (e) => { if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) { e.preventDefault(); cselOpen(sel); } };
+  sel.addEventListener("focus", () => btn.focus());
+  sel.addEventListener("change", () => cselSync(sel));
+  sel.form?.addEventListener("reset", () => setTimeout(() => cselSync(sel)));
+  cselSync(sel);
+}
+function cselPop() {
+  let pop = $("#cselPop");
+  if (pop) return pop;
+  document.body.insertAdjacentHTML("beforeend", `<div class="csel-back" id="cselBack" hidden></div>
+    <div class="csel-pop" id="cselPop" hidden><div class="csel-head"><b class="csel-title"></b><input class="csel-find" type="search" placeholder="Rechercher…" aria-label="Filtrer la liste" autocomplete="off"></div>
+    <ul class="csel-list" role="listbox" tabindex="-1"></ul></div>`);
+  pop = $("#cselPop");
+  $("#cselBack").onclick = () => cselClose(false);
+  pop.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li && !li.classList.contains("off")) cselPick(+li.dataset.i); });
+  pop.addEventListener("keydown", cselKeys);
+  pop.querySelector(".csel-find").addEventListener("input", (e) => cselRender(e.target.value));
+  document.addEventListener("pointerdown", (e) => { if (CSEL.sel && !pop.contains(e.target) && !CSEL.btn.contains(e.target)) cselClose(false); }, true);
+  addEventListener("resize", () => CSEL.sel && !cselMobile() && cselClose(false));
+  addEventListener("scroll", (e) => { if (CSEL.sel && !cselMobile() && !pop.contains(e.target)) cselPlace(); }, true);
+  return pop;
+}
+function cselRender(filter = "") {
+  const sel = CSEL.sel, pop = $("#cselPop"), q = filter.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  CSEL.items = [...sel.options].map((o, i) => ({ o, i })).filter(({ o }) => !o.hidden && (!q || o.text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").includes(q)));
+  const ul = pop.querySelector(".csel-list");
+  ul.innerHTML = CSEL.items.length ? CSEL.items.map(({ o, i }, k) => `<li role="option" id="csel-o${k}" data-i="${i}" class="${o.disabled ? "off" : ""}" aria-selected="${i === sel.selectedIndex}" ${o.disabled ? 'aria-disabled="true"' : ""}><span>${esc(o.text)}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></li>`).join("")
+    : `<li class="csel-none">Aucun résultat</li>`;
+  const cur = CSEL.items.findIndex(({ i }) => i === sel.selectedIndex);
+  cselMove(cur >= 0 ? cur : CSEL.items.findIndex(({ o }) => !o.disabled), false);
+}
+function cselMove(k, scroll = true) {
+  const ul = $("#cselPop .csel-list");
+  ul.querySelector(".hl")?.classList.remove("hl");
+  CSEL.active = k;
+  const li = k >= 0 ? ul.querySelector(`#csel-o${k}`) : null;
+  if (!li) { ul.removeAttribute("aria-activedescendant"); return; }
+  li.classList.add("hl");
+  ul.setAttribute("aria-activedescendant", li.id);
+  li.scrollIntoView({ block: scroll ? "nearest" : "center" });
+}
+function cselPlace() {
+  const pop = $("#cselPop"), r = CSEL.btn.getBoundingClientRect();
+  if (cselMobile()) { pop.style.cssText = ""; return; }
+  const below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 240 && above > below;
+  pop.style.cssText = `left:${Math.max(8, Math.min(r.left, innerWidth - Math.max(r.width, 220) - 8))}px;min-width:${r.width}px;max-height:${Math.min(360, up ? above : below)}px;` +
+    (up ? `bottom:${innerHeight - r.top + 6}px` : `top:${r.bottom + 6}px`);
+}
+function cselOpen(sel) {
+  if (CSEL.sel === sel) return cselClose(true);
+  if (CSEL.sel) cselClose(false);
+  const pop = cselPop(), mobile = cselMobile(), long = sel.options.length > 10;
+  CSEL.sel = sel; CSEL.btn = sel._cbtn;
+  pop.classList.toggle("sheet", mobile);
+  pop.querySelector(".csel-title").textContent = sel._clabel || "Choisir";
+  pop.querySelector(".csel-title").hidden = !mobile;
+  const find = pop.querySelector(".csel-find");
+  find.hidden = !long; find.value = "";
+  pop.querySelector(".csel-head").hidden = !mobile && !long;
+  pop.querySelector(".csel-list").setAttribute("aria-label", sel._clabel || "Choix");
+  cselRender();
+  $("#cselBack").hidden = !mobile;
+  pop.hidden = false;
+  cselPlace();
+  cselMove(CSEL.active, false);
+  CSEL.btn.setAttribute("aria-expanded", "true");
+  (long && !mobile ? find : pop.querySelector(".csel-list")).focus({ preventScroll: true });
+}
+function cselClose(refocus) {
+  if (!CSEL.sel) return;
+  const pop = $("#cselPop");
+  pop.hidden = true; $("#cselBack").hidden = true;
+  CSEL.btn.setAttribute("aria-expanded", "false");
+  if (refocus) CSEL.btn.focus({ preventScroll: true });
+  CSEL.sel = CSEL.btn = null;
+}
+function cselPick(i) {
+  const sel = CSEL.sel;
+  cselClose(true);
+  if (sel.selectedIndex === i) return;
+  sel.selectedIndex = i;
+  sel.dispatchEvent(new Event("input", { bubbles: true }));
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function cselKeys(e) {
+  const n = CSEL.items.length, ok = (k) => k >= 0 && k < n && !CSEL.items[k].o.disabled;
+  const step = (d) => { let k = CSEL.active; for (let t = 0; t < n; t++) { k = (k + d + n) % n; if (ok(k)) return cselMove(k); } };
+  if (e.key === "ArrowDown") { e.preventDefault(); step(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+  else if (e.key === "Home" && e.target.tagName !== "INPUT") { e.preventDefault(); CSEL.active = -1; step(1); }
+  else if (e.key === "End" && e.target.tagName !== "INPUT") { e.preventDefault(); CSEL.active = 0; step(-1); }
+  else if (e.key === "Enter" || (e.key === " " && e.target.tagName !== "INPUT")) { e.preventDefault(); if (ok(CSEL.active)) cselPick(CSEL.items[CSEL.active].i); }
+  else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cselClose(true); }
+  else if (e.key === "Tab") cselClose(false);
+  else if (e.key.length === 1 && e.target.tagName !== "INPUT") {   // saisie rapide : aller au choix qui commence par cette lettre
+    const l = e.key.toLowerCase();
+    for (let t = 1; t <= n; t++) { const k = (CSEL.active + t) % n; if (ok(k) && CSEL.items[k].o.text.trim().toLowerCase().startsWith(l)) return cselMove(k); }
+  }
+}
+const enhanceSelects = (root = document) => root.querySelectorAll("select.input").forEach(enhanceSelect);
+new MutationObserver(() => enhanceSelects()).observe(document.body, { childList: true, subtree: true });
+
 // Barres fixes : leur hauteur réelle sert à placer les rubriques sous la barre du haut ; flèche de retour en haut
 function stickyBars() {
-  const top = $(".mast-top"), rub = $("#rubrics"), btn = $("#toTop"), r = document.documentElement;
+  const top = $(".mast-top"), rub = $("#rubricsWrap"), btn = $("#toTop"), r = document.documentElement;
   const measure = () => {
     r.style.setProperty("--mast-h", top.offsetHeight + "px");
     r.style.setProperty("--sticky-h", top.offsetHeight + rub.offsetHeight + "px");
@@ -1678,6 +1826,17 @@ function stickyBars() {
   };
   addEventListener("scroll", onScroll, { passive: true });
   onScroll();
+  // Rubriques : on signale ce qui dépasse à gauche ou à droite, et les flèches font défiler
+  const nav = $("#rubrics"), wrap = $("#rubricsWrap");
+  const edges = () => {
+    const max = nav.scrollWidth - nav.clientWidth;
+    wrap.classList.toggle("more-left", nav.scrollLeft > 4);
+    wrap.classList.toggle("more-right", max - nav.scrollLeft > 4);
+  };
+  nav.addEventListener("scroll", edges, { passive: true });
+  if ("ResizeObserver" in window) new ResizeObserver(edges).observe(nav); else addEventListener("resize", edges);
+  edges();
+  document.querySelectorAll(".rub-arrow").forEach((b) => (b.onclick = () => nav.scrollBy({ left: b.dataset.dir * nav.clientWidth * 0.7 })));
   btn.onclick = () => {
     const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
@@ -1687,6 +1846,7 @@ function stickyBars() {
 
 (async function start() {
   stickyBars();
+  enhanceSelects();
   if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));   // anciens liens partagés
   $("#menuBtn").innerHTML = ico("menu");
   applyPrefs();
