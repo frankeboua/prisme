@@ -888,10 +888,10 @@ async function pageNotifications() {
   main().innerHTML = `
     <div class="page-head"><div><h1>${ico("bell")} Notifications</h1><p class="lead">Nouveaux articles de vos médias, alertes par mots-clés, suivi de vos signalements et messages de la plateforme.</p></div>
       <div class="row"><button class="btn" data-act="pushperm">${ico("bell")} Activer les notifications du navigateur</button><button class="btn primary" data-act="readall">${ico("check")} Tout marquer comme lu</button></div></div>
-    <div class="panel" style="padding:6px 18px">${n.map((x) => `<div class="switch" style="${x.is_read ? "opacity:.65" : ""}">
-      <div class="row" style="flex-wrap:nowrap;align-items:flex-start"><span class="badge ${x.is_read ? "" : "b-info"}">${ico(KIND[x.kind][0])}${KIND[x.kind][1]}</span>
-      <div>${x.article_id ? `<a href="/article/${x.article_id}" data-act="readone" data-id="${x.id}">${esc(x.message)}</a>` : esc(x.message)}<div class="small muted">${fmtDate(x.created_at)}</div></div></div>
-      ${x.is_read ? "" : `<button class="btn sm" data-act="readone" data-id="${x.id}">Lu</button>`}</div>`).join("") || empty("Aucune notification.", "bell")}</div>`;
+    <div class="panel notif-list">${n.map((x) => `<div class="notif-item ${x.is_read ? "read" : ""}">
+      <div class="notif-meta"><span class="badge ${x.is_read ? "" : "b-info"}">${ico(KIND[x.kind][0])}${KIND[x.kind][1]}</span><span class="small muted">${fmtDate(x.created_at)}</span></div>
+      <div class="notif-msg">${x.article_id ? `<a href="/article/${x.article_id}" data-act="readone" data-id="${x.id}">${esc(x.message)}</a>` : esc(x.message)}</div>
+      ${x.is_read ? "" : `<button class="btn sm notif-read" data-act="readone" data-id="${x.id}">${ico("check")} Lu</button>`}</div>`).join("") || empty("Aucune notification.", "bell")}</div>`;
 }
 
 const REASONS = { factuelle: "Erreur factuelle", date: "Date erronée / info ancienne", source: "Source douteuse", titre_trompeur: "Titre trompeur", traduction: "Erreur de traduction", doublon: "Doublon non détecté", autre: "Autre" };
@@ -1366,16 +1366,44 @@ function postText(a) {
   return `📰 ${a.title}\n\nSource : ${a.source_name} — ${fmtDate(a.published_at, false)}\nStatut Prisme : ${STATUS[a.verification_status]?.[2] || "—"}\n\n👉 ${articleLink(a)}\n\n${tags.join(" ")} #Prisme`;
 }
 async function getArticle(id) { return CARD_CACHE.get(+id) || await get(`/api/articles/${id}`); }
+// Partage : sur téléphone, le menu de partage du système (WhatsApp, Gmail, Messages, Bluetooth… selon les applis installées) ;
+// ailleurs, un panneau du même style avec les principales applications
+const SHARE_APPS = [
+  ["whatsapp", "WhatsApp", "#25d366", '<path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3Z"/><path d="M9 8.5c0 3.6 2.9 6.5 6.5 6.5l1-1.6-2-1-1 1a4.5 4.5 0 0 1-2.4-2.4l1-1-1-2Z" fill="currentColor" stroke="none"/>', (t, l) => `https://wa.me/?text=${t}%20${l}`],
+  ["facebook", "Facebook", "#1877f2", '<path d="M14.5 21v-7.5h2.6l.4-3h-3V8.6c0-.9.3-1.5 1.6-1.5h1.6V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.9 1.4-3.9 4v2.2H9v3h2.5V21" fill="currentColor" stroke="none"/>', (t, l) => `https://www.facebook.com/sharer/sharer.php?u=${l}`],
+  ["email", "E-mail", "#ea4335", '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>', (t, l) => `mailto:?subject=${t}&body=${l}`],
+  ["linkedin", "LinkedIn", "#0a66c2", '<path d="M6.5 9.5V18M6.5 6v.01M10.5 18v-8.5M10.5 13c0-2 1.3-3.5 3.2-3.5 1.9 0 2.8 1.3 2.8 3.4V18"/>', (t, l) => `https://www.linkedin.com/sharing/share-offsite/?url=${l}`],
+  ["x", "X", "#000000", '<path d="M5 4.5 19 19.5M19 4.5 5 19.5" stroke-width="2.4"/>', (t, l) => `https://twitter.com/intent/tweet?text=${t}&url=${l}`],
+  ["telegram", "Telegram", "#229ed9", '<path d="m21 4-3.2 15.2c-.2 1-.9 1.3-1.8.8l-4.8-3.6-2.3 2.2 .3-4.9 8.8-7.9-10.9 6.8L2.8 11c-1-.3-1-1 .2-1.5L19.8 3c.8-.3 1.5.2 1.2 1Z" fill="currentColor" stroke="none"/>', (t, l) => `https://t.me/share/url?url=${l}&text=${t}`],
+];
 async function openShare(id) {
   const a = await getArticle(id);
-  const link = encodeURIComponent(articleLink(a)), title = encodeURIComponent(a.title);
-  const ch = [["whatsapp", "WhatsApp", `https://wa.me/?text=${title}%20${link}`], ["email", "E-mail", `mailto:?subject=${title}&body=${link}`],
-    ["linkedin", "LinkedIn", `https://www.linkedin.com/sharing/share-offsite/?url=${link}`], ["facebook", "Facebook", `https://www.facebook.com/sharer/sharer.php?u=${link}`], ["x", "X (Twitter)", `https://twitter.com/intent/tweet?text=${title}&url=${link}`]];
-  modal(`<div class="row between"><h2 style="margin:0">${ico("share")} Partager</h2><button class="btn ghost sm" data-close>${ico("x")}</button></div>
-    <p class="small muted">${esc(a.title)}</p>
-    <div class="row">${ch.map(([k, l, u]) => `<a class="btn" href="${u}" target="_blank" rel="noopener" data-act="sharelog" data-id="${a.id}" data-ch="${k}">${l}</a>`).join("")}<button class="btn" data-act="copy" data-text="${esc(articleLink(a))}">${ico("copy")} Copier le lien</button></div>
-    <hr class="sep"><h3>${ico("hash")} Publication prête à l'emploi (community management)</h3><div class="post-box" id="postBox">${esc(postText(a))}</div>
-    <button class="btn primary" style="margin-top:10px" data-act="copy" data-text="${esc(postText(a))}">${ico("copy")} Copier la publication</button>`);
+  const url = articleLink(a);
+  if (navigator.share && matchMedia("(pointer: coarse)").matches) {   // téléphone, tablette : menu de partage du système
+    try {
+      await navigator.share({ title: a.title, text: a.title, url });
+      post(`/api/articles/${a.id}/share`, { channel: "systeme" }).catch(() => {});
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;   // l'utilisateur a fermé le menu
+    }
+  }
+  shareSheet(a);
+}
+function shareSheet(a) {
+  const url = articleLink(a), link = encodeURIComponent(url), title = encodeURIComponent(a.title);
+  modal(`<div class="sheet-grip" aria-hidden="true"></div>
+    <div class="row between"><h2 style="margin:0">Partager</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+    <p class="small muted share-title">${esc(a.title)}</p>
+    <div class="share-apps">${SHARE_APPS.map(([k, l, c, svg, u]) => `<a class="share-app" href="${u(title, link)}" target="_blank" rel="noopener" data-act="sharelog" data-id="${a.id}" data-ch="${k}">
+      <span class="share-ico" style="--app:${c}"><svg viewBox="0 0 24 24" aria-hidden="true">${svg}</svg></span><span>${l}</span></a>`).join("")}
+      ${navigator.share ? `<button class="share-app" data-act="sharesys" data-id="${a.id}"><span class="share-ico more">${ico("share")}</span><span>Autres applis</span></button>` : ""}</div>
+    <div class="share-rows">
+      <button class="share-row" data-act="copy" data-text="${esc(url)}"><span class="share-ico row-ico">${ico("copy")}</span>Copier le lien</button>
+      <button class="share-row" data-act="copy" data-text="${esc(postText(a))}"><span class="share-ico row-ico">${ico("hash")}</span>Copier la publication prête à l'emploi</button>
+    </div>
+    <details class="share-post"><summary>Voir la publication (community management)</summary><div class="post-box">${esc(postText(a))}</div></details>`);
+  $("#modal .modal-box").classList.add("share-sheet");
 }
 function openForgot() {
   if (fbOn()) {
@@ -1512,6 +1540,7 @@ document.addEventListener("click", async (e) => {
       case "copytag": await navigator.clipboard.writeText(el.dataset.tag); toast(`${el.dataset.tag} copié.`); break;
       case "post": await openShare(id); break;
       case "sharelog": post(`/api/articles/${id}/share`, { channel: el.dataset.ch }).catch(() => {}); break;
+      case "sharesys": { const art = await getArticle(id); closeModal(); navigator.share({ title: art.title, text: art.title, url: articleLink(art) }).then(() => post(`/api/articles/${id}/share`, { channel: "systeme" }).catch(() => {}), () => {}); break; }
       case "mmtab": mmTab = el.dataset.tab; pageMultimedia(); break;
       case "demo": { const r = await post("/api/demo-login", { username: el.dataset.u }); await onLogged(r); toast(`Connecté(e) : ${r.user.display_name}`); break; }
       case "forgot": openForgot(); break;
