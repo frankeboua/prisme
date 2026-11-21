@@ -170,7 +170,7 @@ function navItems() {
   return [
     ["Lire"],
     ["/", "home", "À la une"], ["/local", "globe", "Près de chez vous"], ["/verifications", "shield", "Vérification des faits"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
-    ["/videos", "video", "Vidéos en plein écran"], ["/multimedia", "headphones", "Podcasts et vidéos"], ["/republications", "repost", "Republications"], ["/recherche", "search", "Rechercher"],
+    ["/shorts", "video", "Shorts"], ["/multimedia", "headphones", "Podcasts et vidéos"], ["/republications", "repost", "Republications"], ["/recherche", "search", "Rechercher"],
     ["Mon espace"],
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
     ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
@@ -303,7 +303,7 @@ async function pageReposts() {
 }
 
 // ====================================================================
-//  Vidéos en plein écran, comme sur TikTok : on fait glisser, la vidéo démarre seule (sans son), on touche pour mettre en pause
+//  Shorts : vidéos en plein écran, comme sur TikTok : on fait glisser, la vidéo démarre seule (sans son), on touche pour mettre en pause
 // ====================================================================
 const REEL = { obs: null, players: {}, active: null };
 const reelAuto = () => store.get("prisme_autoplay", !(navigator.connection && navigator.connection.saveData));
@@ -354,7 +354,7 @@ async function pageReel() {
   $("#reel").innerHTML = `
     <div class="reel-bar">
       <a class="reel-btn" href="/multimedia" aria-label="Quitter le plein écran">${ico("x")}</a>
-      <b>Vidéos</b>
+      <b>Shorts</b>
       <button class="reel-btn wide" id="reelAutoBtn" data-act="reelauto" aria-pressed="${on}">${ico("play")}<span>${on ? "Lecture auto : oui" : "Lecture auto : non"}</span></button>
     </div>
     ${r.items.length ? r.items.map((a, i) => {
@@ -944,7 +944,7 @@ async function pageMultimedia() {
         <p class="small muted">Une visite du site : la une, le spectre, la comparaison entre médias et notre méthode. Vidéo sans son, avec le texte à l'écran. Il s'agit d'une capture du site, pas d'un reportage.</p></div>
     </section>
     <div class="tabs">${[["podcast", "headphones", "Podcasts"], ["video", "video", "Vidéos"], ["social", "social", "Réseaux sociaux"]].map(([k, i, l]) => `<button class="tab ${mmTab === k ? "active" : ""}" data-act="mmtab" data-tab="${k}">${ico(i)}${l}</button>`).join("")}</div>
-    ${mmTab === "video" ? `<a class="btn primary reel-cta" href="/videos">${ico("play")} Regarder en plein écran, comme sur TikTok</a>` : ""}
+    ${mmTab === "video" ? `<a class="btn primary reel-cta" href="/shorts">${ico("play")} Regarder en Shorts, en plein écran</a>` : ""}
     <div id="mmList">${skeleton(3)}</div>`;
   const r = await get(`/api/feed?mode=recent&media=${mmTab}&limit=60`);
   $("#mmList").innerHTML = cards(r.items);
@@ -1840,7 +1840,7 @@ const ROUTES = [
   [/^\/$/, () => { S.feedCat = ""; return pageFeed(); }, "Prisme : l'actualité comparée, média par média"],
   [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
-  [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/videos/, pageReel, "Vidéos"], [/^\/republications/, pageReposts, "Republications"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
+  [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/(shorts|videos)/, pageReel, "Shorts"], [/^\/republications/, pageReposts, "Republications"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
   [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/influence\??(.*)/, pageInfluence, "Médias en progression"], [/^\/verifications\??(.*)/, pageVerifications, "Vérification des faits"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
   [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
