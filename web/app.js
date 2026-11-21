@@ -1662,7 +1662,31 @@ async function endSplash() {
   setTimeout(() => { sp.remove(); document.body.classList.remove("assemble"); }, 1300);
 }
 
+// Barres fixes : leur hauteur réelle sert à placer les rubriques sous la barre du haut ; flèche de retour en haut
+function stickyBars() {
+  const top = $(".mast-top"), rub = $("#rubrics"), btn = $("#toTop"), r = document.documentElement;
+  const measure = () => {
+    r.style.setProperty("--mast-h", top.offsetHeight + "px");
+    r.style.setProperty("--sticky-h", top.offsetHeight + rub.offsetHeight + "px");
+  };
+  if ("ResizeObserver" in window) new ResizeObserver(measure).observe(top); else addEventListener("resize", measure);
+  measure();
+  const onScroll = () => {
+    const y = window.scrollY;
+    document.body.classList.toggle("scrolled", y > 10);
+    btn.classList.toggle("show", y > 500);
+  };
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+  btn.onclick = () => {
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+    $("#main").focus({ preventScroll: true });
+  };
+}
+
 (async function start() {
+  stickyBars();
   if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));   // anciens liens partagés
   $("#menuBtn").innerHTML = ico("menu");
   applyPrefs();
