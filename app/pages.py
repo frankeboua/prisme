@@ -19,6 +19,8 @@ STATIC_PAGES = {
     "/tendances": ("Tendances : les sujets les plus couverts", "Les événements repris par le plus de médias en ce moment, et les mots-clés dominants."),
     "/digest": ("Le digest du jour", "L'essentiel de l'actualité en quelques minutes, résumé à partir de plusieurs sources citées."),
     "/multimedia": ("Podcasts et vidéos", "Les podcasts et vidéos des médias suivis par Prisme."),
+    "/videos": ("Vidéos en plein écran", "Les vidéos des médias suivis par Prisme, à faire défiler en plein écran."),
+    "/republications": ("Republications des lecteurs", "Les informations que les lecteurs de Prisme ont choisi de republier, avec leur avis."),
     "/projet": ("Le projet Prisme", "Pourquoi Prisme existe, comment il fonctionne et qui le réalise."),
     "/influence": ("Médias en progression : l'influence des médias ivoiriens et internationaux", "Les médias dont l'influence grandit : premiers à publier, repris par les autres, suivis par les lecteurs. Méthode et poids affichés."),
     "/verifications": ("Vérification des faits : vrai, faux, trompeur", "Les conclusions des fact-checkers professionnels et de la rédaction Prisme sur les informations qui circulent, avec leurs sources."),

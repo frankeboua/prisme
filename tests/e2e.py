@@ -156,7 +156,7 @@ with sync_playwright() as p:
     page.wait_for_selector(".toast:has-text('transmis')")
     check("signalement envoyé avec message de confirmation", True)
     page.locator(".card [data-act=share]").first.click()
-    page.wait_for_selector("#postBox")
+    page.wait_for_selector(".share-sheet .share-app")
     check("fenêtre de partage", True)
     page.keyboard.press("Escape")
     check("fermeture au clavier (Échap)", page.locator("#modal").is_hidden())

@@ -281,6 +281,18 @@ CREATE TABLE IF NOT EXISTS shares (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Republications : un lecteur republie une information dans Prisme, avec un commentaire facultatif
+CREATE TABLE IF NOT EXISTS reposts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    article_id  INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    comment     TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, article_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reposts_article ON reposts(article_id);
+CREATE INDEX IF NOT EXISTS idx_reposts_date ON reposts(created_at);
+
 CREATE TABLE IF NOT EXISTS translations (
     article_id  INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
     lang        TEXT    NOT NULL,

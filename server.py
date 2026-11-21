@@ -700,6 +700,7 @@ def article(req, q, user, aid):
     out["reports"] = db.rows(CONN, "SELECT reason, status, admin_response, created_at FROM reports WHERE article_id=? ORDER BY created_at DESC", (a["id"],))
     out["verdicts"] = engine.verdicts_for(CONN, out)
     out["related_factchecks"] = engine.related_factchecks(CONN, out)
+    out["reposts"] = repost_info(a["id"], user)
     if user:
         out["favorite"] = db.row(CONN, "SELECT * FROM favorites WHERE user_id=? AND article_id=?", (user["id"], a["id"]))
         prof = engine.user_profile(CONN, user["id"])
@@ -803,6 +804,7 @@ def compare(req, q, user, cid):
 PLAYER_HOSTS = {"players.brightcove.net": "Brightcove", "www.youtube-nocookie.com": "YouTube", "www.youtube.com": "YouTube",
                 "player.vimeo.com": "Vimeo", "www.dailymotion.com": "Dailymotion", "geo.dailymotion.com": "Dailymotion"}
 _players = {}   # article -> lecteur trouvé (ou None), pour ne lire la page du média qu'une fois
+_player_sites = {}   # site du média -> a-t-il fourni un lecteur ? (pour proposer d'abord les vidéos lisibles dans Prisme)
 
 
 def _player_url(u):
@@ -833,6 +835,28 @@ def find_player(html):
     return None
 
 
+@route("GET", "/api/videos")
+def videos(req, q, user):
+    """Vidéos récentes ; celles des médias qui fournissent un lecteur intégrable passent en premier."""
+    items = engine.feed(CONN, user, "recent", None, "video", None, 40, 0)["items"]
+    probe = {}
+    for a in items:   # une vidéo par site encore inconnu suffit pour savoir s'il fournit un lecteur
+        host = urlparse(a.get("url") or "").hostname
+        if host and host not in _player_sites and host not in probe and len(probe) < 4:
+            probe[host] = a["id"]
+    for host, aid in probe.items():
+        try:
+            _players[aid] = find_player(rss.fetch(_article(aid)["url"], timeout=6, max_bytes=3_000_000).decode("utf-8", "replace"))
+        except Exception:
+            _players[aid] = None
+        _player_sites[host] = bool(_players[aid])
+    for a in items:
+        a["playable"] = _players.get(a["id"], _player_sites.get(urlparse(a.get("url") or "").hostname))
+        a["playable"] = bool(a["playable"]) if a["playable"] is not None else None
+    items.sort(key=lambda a: {True: 0, None: 1, False: 2}[a["playable"]])
+    return {"items": items}
+
+
 @route("GET", r"/api/articles/(\d+)/player")
 def article_player(req, q, user, aid):
     a = _article(aid)
@@ -846,8 +870,65 @@ def article_player(req, q, user, aid):
             _players[aid] = find_player(html)
         except Exception:
             _players[aid] = None
+        _player_sites[urlparse(a["url"]).hostname] = bool(_players[aid])
     embed = _players[aid]
     return {"embed": embed, "provider": PLAYER_HOSTS.get(urlparse(embed).hostname) if embed else None}
+
+
+# Republier : seulement une information qui n'a pas été jugée fausse ou trompeuse
+REPOST_BLOCKED = {"infirmee": "Cette information a été démentie : elle ne peut pas être republiée.",
+                  "trompeuse": "Cette information a été jugée trompeuse : elle ne peut pas être republiée."}
+
+
+def repost_info(aid, user=None):
+    out = {"count": db.scalar(CONN, "SELECT COUNT(*) FROM reposts WHERE article_id=?", (int(aid),)),
+           "by": [r["display_name"] for r in db.rows(CONN, """SELECT u.display_name FROM reposts r JOIN users u ON u.id=r.user_id
+                                                            WHERE r.article_id=? ORDER BY r.created_at DESC LIMIT 3""", (int(aid),))]}
+    if user:
+        out["mine"] = bool(db.scalar(CONN, "SELECT 1 FROM reposts WHERE article_id=? AND user_id=?", (int(aid), user["id"])))
+    return out
+
+
+@route("POST", r"/api/articles/(\d+)/repost", "user")
+@db.write
+def repost(req, body, user, aid):
+    limit("repost", req.ip, 30, 60)
+    a = engine.decorate(CONN, dict(_article(aid)))
+    code = (a.get("conclusion") or {}).get("code")
+    if code in REPOST_BLOCKED:
+        raise ApiError(409, REPOST_BLOCKED[code])
+    comment = " ".join(str(body.get("comment") or "").split())[:280] or None
+    CONN.execute("""INSERT INTO reposts(user_id, article_id, comment) VALUES (?,?,?)
+                    ON CONFLICT(user_id, article_id) DO UPDATE SET comment=excluded.comment, created_at=datetime('now')""",
+                 (user["id"], a["id"], comment))
+    CONN.commit()
+    _anon_cache.clear()
+    return {"ok": True, **repost_info(aid, user)}
+
+
+@route("DELETE", r"/api/articles/(\d+)/repost", "user")
+@db.write
+def unrepost(req, q, user, aid):
+    CONN.execute("DELETE FROM reposts WHERE user_id=? AND article_id=?", (user["id"], int(aid)))
+    CONN.commit()
+    _anon_cache.clear()
+    return {"ok": True, **repost_info(aid, user)}
+
+
+@route("GET", "/api/reposts")
+def reposts(req, q, user):
+    n = min(int(qv(q, "limit", 40)), 100)
+    rows = db.rows(CONN, """SELECT r.article_id, r.comment, r.created_at, u.display_name FROM reposts r
+                            JOIN users u ON u.id=r.user_id JOIN articles a ON a.id=r.article_id
+                            ORDER BY r.created_at DESC LIMIT ?""", (n,))
+    now, items = db.now(), []
+    for r in rows:
+        try:
+            art = engine.decorate(CONN, dict(_article(r["article_id"])), now)
+        except ApiError:
+            continue
+        items.append({"by": r["display_name"], "comment": r["comment"], "at": r["created_at"], "article": art})
+    return {"items": items}
 
 
 @route("POST", r"/api/articles/(\d+)/share")

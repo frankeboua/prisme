@@ -115,6 +115,7 @@ const P = {
   book: '<path d="M4 4h6a3 3 0 0 1 3 3v14a2 2 0 0 0-2-2H4z"/><path d="M20 4h-6a3 3 0 0 0-3 3v14a2 2 0 0 1 2-2h7z"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   play: '<path d="M7 4v16l13-8z"/>',
+  repost: '<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>',
   users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-5-6.7"/>',
   social: '<path d="M21 12a8 8 0 0 1-11.8 7L3 21l2-6A8 8 0 1 1 21 12z"/>',
   reader: '<path d="M3 5h7a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H3zM21 5h-7a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h7z"/>',
@@ -169,7 +170,7 @@ function navItems() {
   return [
     ["Lire"],
     ["/", "home", "À la une"], ["/local", "globe", "Près de chez vous"], ["/verifications", "shield", "Vérification des faits"], ["/tendances", "trend", "Tendances"], ["/digest", "digest", "Le digest du jour"],
-    ["/multimedia", "headphones", "Podcasts et vidéos"], ["/recherche", "search", "Rechercher"],
+    ["/videos", "video", "Vidéos en plein écran"], ["/multimedia", "headphones", "Podcasts et vidéos"], ["/republications", "repost", "Republications"], ["/recherche", "search", "Rechercher"],
     ["Mon espace"],
     ["/veille", "eye", "Veille et alertes"], ["/favoris", "star", "Favoris"],
     ["/notifications", "bell", "Notifications", S.unread], ["/signalements", "flag", "Signalements"],
@@ -245,6 +246,159 @@ function watchVideo(fr) {
   fr.replaceWith(box);
 }
 
+// ====================================================================
+//  Republier : partager une information dans Prisme, avec son avis
+// ====================================================================
+async function openRepost(id) {
+  if (!S.user) { toast("Connectez-vous pour republier une information."); nav("/connexion"); return; }
+  const a = await getArticle(id);
+  const c = a.conclusion || { code: "non_confirmee", label: "Pas encore confirmée" };
+  const mine = a.reposts && a.reposts.mine;
+  const head = `<div class="row between"><h2 style="margin:0">${ico("repost")} Republier</h2><button class="btn ghost sm" data-close aria-label="Fermer">${ico("x")}</button></div>
+    <p class="small muted share-title">${esc(a.title)} · ${esc(a.source_name)}</p>`;
+  if (c.code === "infirmee" || c.code === "trompeuse") {
+    modal(`${head}<div class="alert-line bad" style="margin-top:12px">${ico("alert")}<span><b>${esc(c.label)}.</b> ${esc(c.basis || "")} Republier cette information aiderait une fausse nouvelle à circuler : Prisme ne le permet pas.</span></div>`);
+    return;
+  }
+  const note = c.code === "confirmee"
+    ? `<div class="alert-line ok">${ico("check")}<span><b>Information confirmée.</b> ${esc(c.basis || "")}</span></div>`
+    : `<div class="alert-line warn">${ico("alert")}<span><b>${esc(c.label)}.</b> Précisez-le dans votre commentaire, par exemple « à confirmer ».</span></div>`;
+  modal(`${head}${note}
+    <form id="repostForm" style="margin-top:12px">
+      <label class="f"><span>Votre commentaire (facultatif)</span><textarea class="input" name="comment" maxlength="280" rows="3" placeholder="Pourquoi cette information compte, ce qu'il faut retenir…"></textarea></label>
+      <div class="small muted repost-count" style="margin:-6px 0 10px;text-align:right"><span id="repostLen">0</span> / 280</div>
+      <label class="repost-also"><input type="checkbox" name="also" ${navigator.share ? "checked" : ""}> Publier aussi sur mes réseaux (WhatsApp, Facebook…)</label>
+      <p class="small muted">Votre republication cite toujours le média d'origine et renvoie vers son article.</p>
+      <div class="row"><button class="btn primary">${ico("repost")} ${mine ? "Mettre à jour" : "Republier"}</button>${mine ? `<button class="btn ghost" type="button" data-act="unrepost" data-id="${a.id}">Retirer ma republication</button>` : ""}</div>
+    </form>`);
+  const f = $("#repostForm");
+  f.comment.oninput = () => { $("#repostLen").textContent = f.comment.value.length; };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const comment = f.comment.value.trim(), also = f.also.checked;
+    try {
+      const r = await post(`/api/articles/${a.id}/repost`, { comment });
+      a.reposts = { ...(a.reposts || {}), count: r.count, mine: true };
+      closeModal();
+      toast("Republié dans Prisme : visible dans « Republications ».");
+      if (also) {
+        const text = (comment ? `💬 ${comment}\n\n` : "") + postText(a);
+        if (navigator.share) navigator.share({ title: a.title, text }).catch(() => {});
+        else { navigator.clipboard?.writeText(text).catch(() => {}); shareSheet(a); toast("Publication copiée : collez-la où vous voulez."); }
+      }
+      if (location.pathname.startsWith("/article/")) route();
+    } catch (err) { toast(err.message, 1); }
+  };
+}
+
+async function pageReposts() {
+  const r = await get("/api/reposts?limit=60");
+  r.items.forEach((x) => CARD_CACHE.set(x.article.id, x.article));
+  main().innerHTML = `
+    <div class="page-head"><div><h1>${ico("repost")} Republications</h1><p class="lead">Les informations que les lecteurs de Prisme ont choisi de republier, avec leur avis. Une information démentie ou trompeuse ne peut pas être republiée.</p></div></div>
+    ${r.items.length ? `<div class="feed">${r.items.map((x) => `<div class="repost-item">
+      <div class="repost-by">${ico("repost")}<span><b>${esc(x.by)}</b> a republié · ${esc(ago(x.at))}</span></div>
+      ${x.comment ? `<blockquote class="repost-comment">${esc(x.comment)}</blockquote>` : ""}${card(x.article)}</div>`).join("")}</div>`
+      : empty("Personne n'a encore republié d'information. Utilisez le bouton « Republier » sous un article.", "repost")}`;
+}
+
+// ====================================================================
+//  Vidéos en plein écran, comme sur TikTok : on fait glisser, la vidéo démarre seule (sans son), on touche pour mettre en pause
+// ====================================================================
+const REEL = { obs: null, players: {}, active: null };
+const reelAuto = () => store.get("prisme_autoplay", !(navigator.connection && navigator.connection.saveData));
+function reelSetAuto(on) {
+  store.set("prisme_autoplay", on);
+  const b = $("#reelAutoBtn");
+  if (b) { b.setAttribute("aria-pressed", on); b.querySelector("span").textContent = on ? "Lecture auto : oui" : "Lecture auto : non"; }
+  toast(on ? "Les vidéos démarreront toutes seules, sans le son." : "Les vidéos ne démarreront plus toutes seules : touchez ▶ pour lancer.");
+  if (REEL.active) reelActivate(REEL.active);
+}
+function reelStop() {
+  REEL.obs?.disconnect();
+  REEL.obs = null;
+  REEL.active = null;
+}
+async function reelPlayer(slide) {
+  const id = slide.dataset.id;
+  if (!(id in REEL.players)) REEL.players[id] = get(`/api/articles/${id}/player`).then((r) => r.embed).catch(() => null);
+  return REEL.players[id];
+}
+function reelCover(slide) {
+  const box = slide.querySelector(".reel-video");
+  if (box.querySelector("iframe")) box.innerHTML = box.dataset.cover;
+}
+async function reelActivate(slide, manual) {
+  REEL.active = slide;
+  const embed = await reelPlayer(slide);
+  if (REEL.active !== slide) return;
+  const box = slide.querySelector(".reel-video");
+  const label = slide.querySelector(".reel-go");
+  if (!embed) { label.innerHTML = `${ico("ext")} Regarder sur ${esc(slide.dataset.src)}`; label.href = slide.dataset.url; label.target = "_blank"; return; }
+  label.innerHTML = `${ico("play")} Lire la vidéo`;
+  label.removeAttribute("target");
+  label.href = "#";
+  if (!reelAuto() && !manual) return;
+  if (box.querySelector("iframe")) return;
+  const u = new URL(embed);
+  if (u.hostname.includes("brightcove")) { u.searchParams.set("autoplay", manual ? "true" : "muted"); if (!manual) u.searchParams.set("muted", "true"); }
+  else { u.searchParams.set("autoplay", "1"); if (!manual) u.searchParams.set("mute", "1"); u.searchParams.set("playsinline", "1"); }
+  box.innerHTML = `<iframe src="${esc(u.href)}" title="Vidéo : ${esc(slide.dataset.title)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+}
+async function pageReel() {
+  document.body.classList.add("reel-mode");
+  main().innerHTML = `<div class="reel" id="reel"><div class="reel-loading">${ico("video")} Chargement des vidéos…</div></div>`;
+  const r = await get("/api/videos");
+  r.items.forEach((a) => CARD_CACHE.set(a.id, a));
+  const on = reelAuto();
+  $("#reel").innerHTML = `
+    <div class="reel-bar">
+      <a class="reel-btn" href="/multimedia" aria-label="Quitter le plein écran">${ico("x")}</a>
+      <b>Vidéos</b>
+      <button class="reel-btn wide" id="reelAutoBtn" data-act="reelauto" aria-pressed="${on}">${ico("play")}<span>${on ? "Lecture auto : oui" : "Lecture auto : non"}</span></button>
+    </div>
+    ${r.items.length ? r.items.map((a, i) => {
+      const cover = `${picture(a, true)}<span class="reel-tap">${ico("play")}</span>`;
+      return `<section class="reel-slide" data-id="${a.id}" data-url="${esc(safeUrl(a.url) || "/article/" + a.id)}" data-src="${esc(a.source_name)}" data-title="${esc(a.title)}" aria-label="Vidéo ${i + 1} sur ${r.items.length}">
+        <div class="reel-bg">${picture(a)}</div>
+        <div class="reel-video" data-cover="${esc(cover)}">${cover}</div>
+        <div class="reel-info">
+          <div class="reel-src">${esc(a.source_name)} · ${esc(ago(a.published_at))}</div>
+          <h2><a href="/article/${a.id}">${esc(a.title)}</a></h2>
+          <a class="reel-go" href="#" data-reelgo="1">${ico("play")} Lire la vidéo</a>
+        </div>
+        <div class="reel-side">
+          <button class="reel-act" data-act="repost" data-id="${a.id}" aria-label="Republier">${ico("repost")}<span>Republier</span></button>
+          <button class="reel-act" data-act="share" data-id="${a.id}" aria-label="Partager">${ico("share")}<span>Partager</span></button>
+          <a class="reel-act" href="/article/${a.id}" aria-label="Ouvrir l'article">${ico("digest")}<span>Détails</span></a>
+        </div>
+        ${i === 0 ? `<div class="reel-hint"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Glissez vers le haut pour la vidéo suivante</div>` : ""}
+      </section>`;
+    }).join("") + `<section class="reel-slide reel-end"><div>${ico("check")}<h2>Vous avez tout vu</h2><p>Les nouvelles vidéos arrivent avec la prochaine collecte.</p><a class="btn primary" href="/multimedia">Retour à l'espace multimédia</a></div></section>`
+    : `<section class="reel-slide reel-end"><div>${empty("Aucune vidéo pour le moment.", "video")}</div></section>`}`;
+  const reel = $("#reel");
+  reel.onclick = (e) => {
+    const slide = e.target.closest(".reel-slide");
+    if (!slide || slide.classList.contains("reel-end")) return;
+    if (e.target.closest(".reel-tap") || e.target.closest("[data-reelgo]")) {
+      const go = slide.querySelector(".reel-go");
+      if (go.target === "_blank") return;   // pas de lecteur intégrable : le lien s'ouvre chez le média
+      e.preventDefault();
+      reelActivate(slide, true);
+    }
+  };
+  REEL.obs = new IntersectionObserver((entries) => entries.forEach((en) => {
+    const slide = en.target;
+    if (en.isIntersecting && en.intersectionRatio >= 0.6) {
+      reelActivate(slide);
+      const next = slide.nextElementSibling;
+      if (next && next.dataset.id) reelPlayer(next);   // on prépare la suivante
+    } else if (!en.isIntersecting || en.intersectionRatio < 0.4) reelCover(slide);
+  }), { root: reel, threshold: [0, 0.4, 0.6] });
+  reel.querySelectorAll(".reel-slide[data-id]").forEach((sl) => REEL.obs.observe(sl));
+  reel.focus({ preventScroll: true });
+}
+
 function card(a) {
   const others = a.others || [];
   const names = [...new Set(others.map((o) => o.publisher || o.source_name))].filter((n) => n !== pubOf(a));
@@ -266,6 +420,7 @@ function card(a) {
       <button class="btn ghost" data-act="why" title="Pourquoi cet article est-il proposé ?" aria-label="Pourquoi cet article est-il proposé ?">${ico("help")}<span class="lbl">Pourquoi ?</span></button>
       <span class="grow"></span>
       <button class="btn ghost" data-act="fav" data-id="${a.id}" title="Ajouter aux favoris" aria-label="Ajouter aux favoris" aria-pressed="${S.favs.has(a.id)}" style="${S.favs.has(a.id) ? "color:var(--accent)" : ""}">${ico("star")}<span class="lbl">Favori</span></button>
+      <button class="btn ghost" data-act="repost" data-id="${a.id}" title="Republier dans Prisme" aria-label="Republier">${ico("repost")}<span class="lbl">Republier</span></button>
       <button class="btn ghost" data-act="share" data-id="${a.id}" title="Partager" aria-label="Partager">${ico("share")}<span class="lbl">Partager</span></button>
       <button class="btn ghost" data-act="report" data-id="${a.id}" title="Signaler une erreur" aria-label="Signaler une erreur">${ico("flag")}<span class="lbl">Signaler</span></button>
       ${a.is_demo ? "" : `<button class="btn ghost" data-act="hide" data-id="${a.source_id}" data-pub="${esc(pubOf(a))}" title="Ne plus voir les articles de ${esc(pubOf(a))}" aria-label="Masquer ${esc(pubOf(a))}">${ico("x")}<span class="lbl">Masquer</span></button>`}
@@ -471,6 +626,7 @@ async function pageArticle(id) {
       <div class="row no-print" style="margin:6px 0 22px">
         ${safeUrl(a.url) ? `<a class="btn primary" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} ${a.media_type === "video" ? "Regarder la vidéo sur" : "Lire l'article original sur"} ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
         <button class="btn" data-act="fav" data-id="${a.id}">${ico("star")} ${S.favs.has(a.id) ? "Retirer des favoris" : "Ajouter aux favoris"}</button>
+        <button class="btn ${a.reposts && a.reposts.mine ? "on" : ""}" data-act="repost" data-id="${a.id}">${ico("repost")} ${a.reposts && a.reposts.mine ? "Republié" : "Republier"}${a.reposts && a.reposts.count ? ` · ${a.reposts.count}` : ""}</button>
         <button class="btn" data-act="share" data-id="${a.id}">${ico("share")} Partager</button>
         <button class="btn danger" data-act="report" data-id="${a.id}">${ico("flag")} Signaler une erreur</button>
         ${S.user && S.user.role === "admin" ? `<button class="btn" data-act="verdict" data-id="${a.id}">${ico("shield")} Rendre un verdict</button>` : ""}
@@ -788,6 +944,7 @@ async function pageMultimedia() {
         <p class="small muted">Une visite du site : la une, le spectre, la comparaison entre médias et notre méthode. Vidéo sans son, avec le texte à l'écran. Il s'agit d'une capture du site, pas d'un reportage.</p></div>
     </section>
     <div class="tabs">${[["podcast", "headphones", "Podcasts"], ["video", "video", "Vidéos"], ["social", "social", "Réseaux sociaux"]].map(([k, i, l]) => `<button class="tab ${mmTab === k ? "active" : ""}" data-act="mmtab" data-tab="${k}">${ico(i)}${l}</button>`).join("")}</div>
+    ${mmTab === "video" ? `<a class="btn primary reel-cta" href="/videos">${ico("play")} Regarder en plein écran, comme sur TikTok</a>` : ""}
     <div id="mmList">${skeleton(3)}</div>`;
   const r = await get(`/api/feed?mode=recent&media=${mmTab}&limit=60`);
   $("#mmList").innerHTML = cards(r.items);
@@ -1556,6 +1713,10 @@ document.addEventListener("click", async (e) => {
       case "report": prevent(); openReport(+id); break;
       case "play": await play(id); break;
       case "watch": if (el.dataset.embed) { prevent(); watchVideo(el); } break;
+      case "repost": prevent(); await openRepost(id); break;
+      case "unrepost": prevent(); await del(`/api/articles/${id}/repost`); closeModal(); toast("Republication retirée."); if (location.pathname.startsWith("/article/") || location.pathname.startsWith("/republications")) route(); break;
+      case "reelauto": prevent(); reelSetAuto(!reelAuto()); break;
+      case "reelsound": prevent(); toast("Touchez la vidéo puis l'icône du haut-parleur pour activer le son."); break;
       case "closeplayer": $("#player").hidden = true; $("#player").innerHTML = ""; break;
       case "tool": tool(el.dataset.tool); break;
       case "cite": document.getElementById("cite-" + el.dataset.n)?.scrollIntoView({ behavior: "smooth", block: "center" }); break;
@@ -1679,13 +1840,14 @@ const ROUTES = [
   [/^\/$/, () => { S.feedCat = ""; return pageFeed(); }, "Prisme : l'actualité comparée, média par média"],
   [/^\/rubrique\/([a-z]+)/, (slug) => { S.feedCat = slug; return pageFeed(); }], [/^\/article\/(\d+)/, pageArticle], [/^\/sujet\/(\d+)/, pageCompare],
   [/^\/recherche\??(.*)/, pageSearch, "Recherche"], [/^\/tendances/, pageTrends, "Tendances"], [/^\/digest/, pageDigest, "Le digest du jour"],
-  [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
+  [/^\/multimedia/, pageMultimedia, "Podcasts et vidéos"], [/^\/videos/, pageReel, "Vidéos"], [/^\/republications/, pageReposts, "Republications"], [/^\/veille/, pageVeille, "Veille et alertes"], [/^\/favoris\??(.*)/, pageFavorites, "Mes favoris"],
   [/^\/local\??(.*)/, pageLocal, "Près de chez vous"], [/^\/influence\??(.*)/, pageInfluence, "Médias en progression"], [/^\/verifications\??(.*)/, pageVerifications, "Vérification des faits"], [/^\/notifications/, pageNotifications, "Notifications"], [/^\/signalements\??(.*)/, pageReports, "Signalements"], [/^\/sources/, pageSources, "Médias suivis"],
   [/^\/admin/, pageAdmin, "Administration"], [/^\/parametres/, pageSettings, "Paramètres"], [/^\/projet/, pageProject, "Le projet"], [/^\/methode/, pageMethod, "Notre méthode"], [/^\/connexion/, pageLogin, "Connexion"], [/^\/avis/, pageFeedback, "Donner mon avis"],
 ];
 async function route() {
   const h = location.pathname + location.search;
-  document.body.classList.remove("reader");
+  document.body.classList.remove("reader", "reel-mode");
+  reelStop();
   closeDrawer();
   renderNav();
   for (const [rx, fn, title] of ROUTES) {

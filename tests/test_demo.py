@@ -67,3 +67,22 @@ class Scenarios(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Reposts(unittest.TestCase):
+    def test_repost_then_blocked_once_denied(self):
+        tok = call(server, "POST", "/api/demo-login", {"username": "kevin"})[2]["token"]
+        admin = call(server, "POST", "/api/demo-login", {"username": "admin"})[2]["token"]
+        aid = db.scalar(CONN, "SELECT id FROM articles WHERE title LIKE ?", ("%carburant%",))
+        self.assertEqual(call(server, "POST", f"/api/articles/{aid}/repost", {"comment": "A lire"})[0], 401)
+        st, _, r = call(server, "POST", f"/api/articles/{aid}/repost", {"comment": "  A   lire  "}, token=tok)
+        self.assertEqual((st, r["count"], r["mine"]), (200, 1, True))
+        items = call(server, "GET", "/api/reposts")[2]["items"]
+        self.assertEqual((items[0]["comment"], items[0]["article"]["id"]), ("A lire", aid))
+        self.assertEqual(call(server, "DELETE", f"/api/articles/{aid}/repost", token=tok)[2]["count"], 0)
+        st, _, _ = call(server, "POST", "/api/verdicts", {"article_id": aid, "verdict": "faux", "explanation": "Le ministère a publié un démenti officiel le jour même.",
+                                                          "sources": ["https://www.gouv.ci/"]}, token=admin)
+        self.assertEqual(st, 200)
+        st, _, r = call(server, "POST", f"/api/articles/{aid}/repost", {}, token=tok)
+        self.assertEqual(st, 409)
+        self.assertIn("démentie", r["error"])
