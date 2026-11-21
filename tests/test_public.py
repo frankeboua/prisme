@@ -1133,3 +1133,17 @@ class TestsUtilisateurs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VideoPlayer(unittest.TestCase):
+    def test_only_official_players_are_embedded(self):
+        bc = "https://players.brightcove.net/665003303001/6tKQRAx7lu_default/index.html?videoId=1"
+        self.assertEqual(server.find_player('<script>{"embedUrl":"%s"}</script>' % bc.replace("/", "\/")), bc)
+        self.assertEqual(server.find_player('<meta property="og:video" content="https://www.youtube.com/embed/abc">'), "https://www.youtube-nocookie.com/embed/abc")
+        self.assertIsNone(server.find_player('<meta property="og:video" content="https://evil.example/embed/abc">'))
+        self.assertIsNone(server.find_player('<iframe src="http://www.youtube.com/embed/abc">'))
+
+    def test_csp_allows_player_frames(self):
+        csp = server._csp()
+        self.assertIn("frame-src 'self' https://players.brightcove.net", csp)
+        self.assertIn("https://www.youtube-nocookie.com", csp)

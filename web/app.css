@@ -638,3 +638,22 @@ body:has(#player:not([hidden])) .to-top { bottom: 92px; }
   .share-apps { flex-wrap: wrap; overflow: visible; margin: 0; gap: 10px 0; }
   .share-app { width: 74px; }
 }
+
+/* Vidéos : bouton ▶ sur les cartes, zone de lecture dans la page */
+.play-badge { position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(20, 19, 16, .72); color: #fff; box-shadow: 0 6px 20px rgba(0, 0, 0, .3); transition: transform .2s, background .2s; }
+.play-badge svg { width: 22px; height: 22px; fill: currentColor; stroke: none; margin-left: 3px; }
+.card:hover .play-badge { transform: scale(1.08); background: var(--accent); }
+.video-frame { display: block; text-decoration: none; color: #fff; cursor: pointer; }
+.video-cover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .05), rgba(0, 0, 0, .55)); }
+.video-play { width: 78px; height: 78px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35); transition: transform .2s; }
+.video-play svg { width: 32px; height: 32px; fill: currentColor; stroke: none; margin-left: 5px; }
+.video-frame:hover .video-play { transform: scale(1.08); }
+.video-label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: rgba(0, 0, 0, .6); font-weight: 600; font-size: .92rem; }
+.video-label svg { width: 15px; height: 15px; }
+.video-frame:hover { color: #fff; }
+.video-frame.playing { background: #000; }
+.video-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+@media (max-width: 460px) { .video-play { width: 64px; height: 64px; } .play-badge { width: 44px; height: 44px; } }

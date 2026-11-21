@@ -799,6 +799,57 @@ def compare(req, q, user, cid):
     return res
 
 
+# Lecteurs vidéo intégrables : seuls les lecteurs officiels de ces hébergeurs sont acceptés
+PLAYER_HOSTS = {"players.brightcove.net": "Brightcove", "www.youtube-nocookie.com": "YouTube", "www.youtube.com": "YouTube",
+                "player.vimeo.com": "Vimeo", "www.dailymotion.com": "Dailymotion", "geo.dailymotion.com": "Dailymotion"}
+_players = {}   # article -> lecteur trouvé (ou None), pour ne lire la page du média qu'une fois
+
+
+def _player_url(u):
+    u = (u or "").replace("\\/", "/").replace("&amp;", "&").strip()
+    try:
+        parts = urlparse(u)
+    except ValueError:
+        return None
+    if parts.scheme != "https" or parts.hostname not in PLAYER_HOSTS:
+        return None
+    if parts.hostname == "www.youtube.com":   # YouTube en mode sans cookies
+        u = u.replace("https://www.youtube.com/", "https://www.youtube-nocookie.com/", 1)
+    return u if "/embed/" in u or "brightcove" in u or "vimeo" in u or "dailymotion" in u else None
+
+
+def find_player(html):
+    """Cherche le lecteur officiel déclaré par la page du média (données structurées, Open Graph, Twitter, iframe)."""
+    patterns = [r'"embedUrl"\s*:\s*"([^"]+)"',
+                r'<meta[^>]+property=["\']og:video:secure_url["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+property=["\']og:video(?::url)?["\'][^>]+content=["\']([^"\']+)',
+                r'<meta[^>]+name=["\']twitter:player["\'][^>]+content=["\']([^"\']+)',
+                r'<iframe[^>]+src=["\'](https://(?:www\.youtube(?:-nocookie)?\.com/embed/|players\.brightcove\.net/|player\.vimeo\.com/video/|(?:geo|www)\.dailymotion\.com/)[^"\']+)']
+    for pat in patterns:
+        for m in re.finditer(pat, html, re.I):
+            u = _player_url(m.group(1))
+            if u:
+                return u
+    return None
+
+
+@route("GET", r"/api/articles/(\d+)/player")
+def article_player(req, q, user, aid):
+    a = _article(aid)
+    if a["media_type"] != "video" or not http_ok(a.get("url")):
+        return {"embed": None}
+    aid = int(aid)
+    if aid not in _players:
+        limit("player", req.ip, 30, 60)
+        try:
+            html = rss.fetch(a["url"], timeout=10, max_bytes=3_000_000).decode("utf-8", "replace")
+            _players[aid] = find_player(html)
+        except Exception:
+            _players[aid] = None
+    embed = _players[aid]
+    return {"embed": embed, "provider": PLAYER_HOSTS.get(urlparse(embed).hostname) if embed else None}
+
+
 @route("POST", r"/api/articles/(\d+)/share")
 @db.write
 def share(req, body, user, aid):
@@ -1256,10 +1307,11 @@ class Request:
 
 def _csp():
     script, connect, frame = "'self'", "'self' https://api.mymemory.translated.net", "'self'"
+    frame += "".join(f" https://{h}" for h in PLAYER_HOSTS)   # lecteurs vidéo officiels des médias
     if firebase_on():   # SDK Firebase, échanges avec Google et fenêtre de connexion Google
         script += " https://www.gstatic.com https://apis.google.com"
         connect += " https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com"
-        frame = f"https://{FIREBASE['authDomain']} https://accounts.google.com"
+        frame += f" https://{FIREBASE['authDomain']} https://accounts.google.com"
     return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' https: http:; "
             f"connect-src {connect}; frame-src {frame}; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 

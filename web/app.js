@@ -221,12 +221,36 @@ const illustration = (a) => `/illustrations/${esc(a.category_slug || "actualite"
 const picture = (a, big) => safeUrl(a.image_url)
   ? `<img src="/img/${a.id}-${big ? 960 : 480}.webp" srcset="/img/${a.id}-480.webp 480w, /img/${a.id}-960.webp 960w" sizes="${big ? "(max-width: 820px) 100vw, 66vw" : "(max-width: 820px) 100vw, 320px"}" alt="" ${big ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async" data-fallback="${illustration(a)}">`
   : `<img src="${illustration(a)}" alt="" loading="lazy"><span class="illu-tag">Illustration</span>`;
+// Vidéos : le lecteur officiel du média quand il l'autorise, sinon un grand bouton vers sa page
+function videoFrame(a) {
+  setTimeout(() => preparePlayer(a.id), 0);
+  return `<a class="hero-frame video-frame" id="videoFrame" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener" data-act="watch" data-id="${a.id}">
+    ${picture(a, true)}<span class="video-cover"><span class="video-play">${ico("play")}</span><span class="video-label" id="videoLabel">Regarder sur ${esc(a.source_name)} ${ico("ext")}</span></span></a>`;
+}
+async function preparePlayer(id) {
+  const r = await get(`/api/articles/${id}/player`).catch(() => ({ embed: null }));
+  const fr = $("#videoFrame");
+  if (!fr || fr.dataset.id != id || !r.embed) return;
+  fr.dataset.embed = r.embed;
+  fr.removeAttribute("target");
+  $("#videoLabel").textContent = "Lire la vidéo";
+  fr.setAttribute("aria-label", "Lire la vidéo ici");
+}
+function watchVideo(fr) {
+  const u = new URL(fr.dataset.embed);
+  if (u.hostname.includes("brightcove")) u.searchParams.set("autoplay", "true"); else u.searchParams.set("autoplay", "1");
+  const box = document.createElement("div");
+  box.className = "hero-frame video-frame playing";
+  box.innerHTML = `<iframe src="${esc(u.href)}" title="Lecteur vidéo" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  fr.replaceWith(box);
+}
+
 function card(a) {
   const others = a.others || [];
   const names = [...new Set(others.map((o) => o.publisher || o.source_name))].filter((n) => n !== pubOf(a));
   const why = a.why;
   return `<article class="card" data-id="${a.id}" data-pub="${esc(pubOf(a))}">
-    <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}</a>
+    <a class="card-img" href="/article/${a.id}" tabindex="-1" aria-hidden="true"><span class="media-tag">${mediaBadge(a.media_type)}</span>${picture(a)}${a.media_type === "video" ? `<span class="play-badge" aria-hidden="true">${ico("play")}</span>` : ""}</a>
     <div class="card-body">
       <div class="row" style="gap:6px 10px">${catBadge(a)}${conclusionBadge(a.conclusion)}${freshBadge(a.freshness)}${why && why.discovery ? `<span class="badge discovery-tag">${ico("globe")}Découverte</span>` : ""}${demoBadge(a)}</div>
       <h3><a href="/article/${a.id}">${esc(a.title)}</a></h3>
@@ -442,10 +466,10 @@ async function pageArticle(id) {
       ${a.correction_note ? `<div class="alert-line ok" style="margin-bottom:12px">${ico("check")}<span><b>Correction :</b> ${esc(a.correction_note)}</span></div>` : ""}
       ${a.verification_status === "conteste" ? `<div class="alert-line bad" style="margin-bottom:12px">${ico("alert")}<span><b>${esc(a.verification_label)} :</b> d'autres médias rapportent une version différente. Consultez l'onglet « Recoupement ».</span></div>` : ""}
       ${a.media_type === "podcast" && a.media_url ? `<button class="btn primary" data-act="play" data-id="${a.id}" style="margin-bottom:14px">${ico("play")} Écouter le podcast</button>` : ""}
-      <div class="hero-frame">${picture(a, true)}</div>
+      ${a.media_type === "video" && safeUrl(a.url) ? videoFrame(a) : `<div class="hero-frame">${picture(a, true)}</div>`}
       <div class="content" id="articleContent">${a.paragraphs.map((p) => `<p>${esc(p)}</p>`).join("")}</div>
       <div class="row no-print" style="margin:6px 0 22px">
-        ${safeUrl(a.url) ? `<a class="btn primary" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} Lire l'article original sur ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
+        ${safeUrl(a.url) ? `<a class="btn primary" href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener">${ico("ext")} ${a.media_type === "video" ? "Regarder la vidéo sur" : "Lire l'article original sur"} ${esc(a.source_name)}</a>` : `<span class="badge b-demo">Contenu de démonstration : pas de lien externe</span>`}
         <button class="btn" data-act="fav" data-id="${a.id}">${ico("star")} ${S.favs.has(a.id) ? "Retirer des favoris" : "Ajouter aux favoris"}</button>
         <button class="btn" data-act="share" data-id="${a.id}">${ico("share")} Partager</button>
         <button class="btn danger" data-act="report" data-id="${a.id}">${ico("flag")} Signaler une erreur</button>
@@ -1531,6 +1555,7 @@ document.addEventListener("click", async (e) => {
       case "share": prevent(); await openShare(id); break;
       case "report": prevent(); openReport(+id); break;
       case "play": await play(id); break;
+      case "watch": if (el.dataset.embed) { prevent(); watchVideo(el); } break;
       case "closeplayer": $("#player").hidden = true; $("#player").innerHTML = ""; break;
       case "tool": tool(el.dataset.tool); break;
       case "cite": document.getElementById("cite-" + el.dataset.n)?.scrollIntoView({ behavior: "smooth", block: "center" }); break;
