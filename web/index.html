@@ -10,7 +10,26 @@
   <link rel="preload" href="/fonts/Fraunces.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/app.css">
 </head>
-<body>
+<body class="booting">
+  <div class="splash" id="splash" aria-hidden="true">
+    <div class="splash-in">
+      <svg class="splash-prism" viewBox="0 0 240 130" width="240" height="130">
+        <path class="sp-beam" pathLength="1" d="M6 76 92 70"/>
+        <path class="sp-inner" pathLength="1" d="M92 70 146 66"/>
+        <g class="sp-rays">
+          <path pathLength="1" style="--c:var(--s1);--d:0s" d="M146 66 234 40"/>
+          <path pathLength="1" style="--c:var(--s2);--d:.05s" d="M146 66 234 55"/>
+          <path pathLength="1" style="--c:var(--s3);--d:.1s" d="M146 66 234 70"/>
+          <path pathLength="1" style="--c:var(--s4);--d:.15s" d="M146 66 234 85"/>
+          <path pathLength="1" style="--c:var(--s5);--d:.2s" d="M146 66 234 100"/>
+          <path pathLength="1" style="--c:var(--s6);--d:.25s" d="M146 66 234 115"/>
+        </g>
+        <path class="sp-tri" pathLength="1" d="M120 14 172 112H68Z"/>
+      </svg>
+      <div class="splash-word">Prisme</div>
+      <div class="splash-tag">L'information sous tous ses angles</div>
+    </div>
+  </div>
   <a class="skip" href="#main">Aller au contenu</a>
   <header class="masthead">
     <div class="mast-top">

@@ -1646,6 +1646,22 @@ async function route() {
   main().innerHTML = `<div class="empty"><h1>Page introuvable</h1><p>Cette adresse n'existe pas ou plus.</p><a class="btn" href="/">Retour à l'accueil</a></div>`;
 }
 
+// Écran de chargement : le prisme termine son animation, reste affiché un instant, puis la page se met en place
+const splashDrawn = new Promise((ok) => {
+  const tag = document.querySelector(".splash-tag");
+  if (!tag || matchMedia("(prefers-reduced-motion: reduce)").matches) return ok();
+  tag.addEventListener("animationend", () => setTimeout(ok, 550), { once: true });
+  setTimeout(ok, 4000);   // au cas où l'animation ne se déclencherait pas
+});
+async function endSplash() {
+  const sp = $("#splash");
+  if (!sp) return;
+  await splashDrawn;
+  sp.classList.add("out");
+  document.body.classList.replace("booting", "assemble");
+  setTimeout(() => { sp.remove(); document.body.classList.remove("assemble"); }, 1300);
+}
+
 (async function start() {
   if (location.hash.startsWith("#/")) history.replaceState(null, "", location.hash.slice(1));   // anciens liens partagés
   $("#menuBtn").innerHTML = ico("menu");
@@ -1661,7 +1677,7 @@ async function route() {
   await refreshMe();
   applyPrefs();
   window.addEventListener("popstate", route);
-  route();
+  await route();
   dateline();
   setInterval(() => { if (S.token) refreshMe(); }, 60000);
-})();
+})().finally(endSplash);   // même en cas d'erreur, l'écran de chargement s'efface

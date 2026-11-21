@@ -464,3 +464,42 @@ img, video, iframe, svg { max-width: 100%; }
 .conclusion.c-confirmee .verdict-head svg, .conclusion.c-confirmee .verdict-head b:first-of-type { color: var(--ok); }
 .conclusion.c-infirmee .verdict-head svg, .conclusion.c-infirmee .verdict-head b:first-of-type { color: var(--bad); }
 .conclusion.c-trompeuse .verdict-head b:first-of-type, .conclusion.c-contestee .verdict-head b:first-of-type { color: var(--warn); }
+
+/* Écran de chargement : le prisme se dessine, décompose la lumière, puis l'application prend forme */
+body.booting { overflow: hidden; }
+.splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--bg); color: var(--text);
+  animation: splash-out .45s ease 5s forwards; }   /* filet de sécurité si le script ne se charge pas */
+.splash.out { animation: splash-out .45s ease forwards; }
+.splash-in { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
+.splash-prism { width: min(240px, 64vw); height: auto; overflow: visible; }
+.splash-prism path { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.sp-tri { stroke: var(--text); stroke-width: 4; animation: sp-draw .7s cubic-bezier(.65, 0, .35, 1) .1s forwards, sp-glow 1.6s ease-in-out 1.7s infinite; }
+.sp-beam { stroke: var(--text); stroke-width: 3; animation: sp-draw .4s ease-in .7s forwards; }
+.sp-inner { stroke: var(--muted); stroke-width: 2; opacity: .55; animation: sp-draw .15s linear 1.08s forwards; }
+.sp-rays path { stroke: var(--c); stroke-width: 3.2; animation: sp-draw .5s cubic-bezier(.2, .7, .3, 1) calc(1.2s + var(--d)) forwards; }
+.splash-word { font-family: var(--serif); font-size: clamp(2.4rem, 9vw, 3.4rem); font-weight: 600; letter-spacing: -.035em; line-height: 1;
+  font-variation-settings: "opsz" 144; opacity: 0; animation: sp-rise .6s ease 1.25s forwards; }
+.splash-tag { font-size: .95rem; color: var(--muted); opacity: 0; animation: sp-rise .6s ease 1.5s forwards; }
+@keyframes sp-draw { to { stroke-dashoffset: 0; } }
+@keyframes sp-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes sp-glow { 50% { stroke-width: 5.5; } }
+@keyframes splash-out { to { opacity: 0; visibility: hidden; transform: scale(1.04); } }
+
+/* L'application se met en place, morceau par morceau */
+body.assemble .mast-top { animation: asm-down .5s ease both; }
+body.assemble .mast-brand { animation: asm-rise .6s ease .08s both; }
+body.assemble .spectrum i { transform-origin: left; animation: asm-grow .45s cubic-bezier(.2, .7, .3, 1) both; }
+body.assemble .spectrum i:nth-child(2) { animation-delay: .06s; } body.assemble .spectrum i:nth-child(3) { animation-delay: .12s; }
+body.assemble .spectrum i:nth-child(4) { animation-delay: .18s; } body.assemble .spectrum i:nth-child(5) { animation-delay: .24s; }
+body.assemble .spectrum i:nth-child(6) { animation-delay: .3s; }
+body.assemble .rubrics { animation: asm-rise .5s ease .3s both; }
+body.assemble #main { animation: asm-rise .6s ease .4s both; }
+body.assemble .site-foot { animation: asm-rise .6s ease .55s both; }
+@keyframes asm-down { from { opacity: 0; transform: translateY(-12px); } }
+@keyframes asm-rise { from { opacity: 0; transform: translateY(18px); } }
+@keyframes asm-grow { from { transform: scaleX(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .splash, .splash *, body.assemble * { animation-duration: .01s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
+  .splash { animation-delay: 1s !important; }
+}
