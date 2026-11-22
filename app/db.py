@@ -102,7 +102,8 @@ def fill_publishers(conn):
     conn.execute("""UPDATE sources SET publisher = CASE WHEN name LIKE 'Le Monde%' THEN 'Le Monde' WHEN name LIKE 'BBC%' THEN 'BBC'
                                                         WHEN name LIKE 'Radio France%' THEN 'Radio France' WHEN name LIKE 'France 24%' THEN 'France 24'
                                                         WHEN name LIKE 'RFI%' THEN 'RFI' WHEN name LIKE 'Franceinfo%' THEN 'Franceinfo'
-                                                        WHEN name LIKE 'Libération%' THEN 'Libération' ELSE name END
+                                                        WHEN name LIKE 'Libération%' THEN 'Libération'
+                                                        WHEN name = 'RTI Officiel' THEN 'RTI Info' ELSE name END
                     WHERE publisher IS NULL""")
 
 

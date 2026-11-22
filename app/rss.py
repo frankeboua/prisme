@@ -16,7 +16,19 @@ UA = "Prisme-Agregateur/1.1 (lecture de flux RSS publics)"
 MAX_FEED_BYTES = 5 * 1024 * 1024
 NS = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/",
       "content": "http://purl.org/rss/1.0/modules/content/", "dc": "http://purl.org/dc/elements/1.1/",
-      "itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"}
+      "itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd", "yt": "http://www.youtube.com/xml/schemas/2015"}
+YOUTUBE_WATCH = re.compile(r"^https://(?:www\.|m\.)?youtube\.com/(?:watch\?v=|shorts/)([\w-]{11})|^https://youtu\.be/([\w-]{11})")
+
+
+def youtube_id(url):
+    m = YOUTUBE_WATCH.match(url or "")
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def _yt_description(text):
+    """Description YouTube : on garde le texte, sans les lignes d'abonnement, de liens et de mots-dièse."""
+    keep = [l for l in (text or "").splitlines() if "http" not in l and not l.strip().startswith("#")]
+    return "\n".join(keep).split("\n\n\n")[0].strip()
 
 
 def _date(s):
@@ -87,13 +99,16 @@ def parse_feed(xml_bytes):
         })
     for e in root.findall("atom:entry", NS):
         link = e.find("atom:link", NS)
+        thumb = e.find("media:group/media:thumbnail", NS)
+        vid = _text(e, "yt:videoId")
         items.append({
             "guid": _text(e, "atom:id"), "title": nlp.strip_html(_text(e, "atom:title")),
-            "summary": _text(e, "atom:summary") or _text(e, "media:group/media:description"),
+            "summary": _text(e, "atom:summary") or _yt_description(_text(e, "media:group/media:description")),
             "content": _text(e, "atom:content"), "url": safe_url(link.get("href")) if link is not None else None,
             "author": _text(e, "atom:author/atom:name"),
             "published_at": _date(_text(e, "atom:published") or _text(e, "atom:updated")),
-            "image_url": None, "media_url": None, "media_kind": None, "duration": None,
+            "image_url": safe_url(thumb.get("url")) if thumb is not None else None, "media_url": None,
+            "media_kind": "video" if vid else None, "duration": None,
         })
     return items
 
@@ -130,7 +145,7 @@ def fetch(url, timeout=25, max_bytes=MAX_FEED_BYTES):   # certains sites ivoirie
 def _media_type(src, it):
     if it["media_kind"] == "audio" or src["kind"] == "podcast":
         return "podcast"
-    if it["media_kind"] == "video" or re.search(r"/videos?/|/video-", it["url"] or "") or re.match(r"^\s*(vid[ée]o|replay)\b", it["title"], re.I):
+    if it["media_kind"] == "video" or youtube_id(it["url"]) or re.search(r"/videos?/|/video-", it["url"] or "") or re.match(r"^\s*(vid[ée]o|replay)\b", it["title"], re.I):
         return "video"
     if src["kind"] == "social":
         return "social"

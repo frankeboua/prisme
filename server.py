@@ -838,12 +838,16 @@ def find_player(html):
 @route("GET", "/api/videos")
 def videos(req, q, user):
     """Vidéos récentes ; celles des médias qui fournissent un lecteur intégrable passent en premier."""
-    items = engine.feed(CONN, user, "recent", None, "video", None, 40, 0)["items"]
+    items = engine.feed(CONN, user, "recent", None, "video", None, 100, 0)["items"]
     probe = {}
     for a in items:   # une vidéo par site encore inconnu suffit pour savoir s'il fournit un lecteur
         host = urlparse(a.get("url") or "").hostname
         if host and host not in _player_sites and host not in probe and len(probe) < 4:
             probe[host] = a["id"]
+    for host, aid in list(probe.items()):
+        vid = rss.youtube_id(_article(aid)["url"])
+        if vid:   # vidéo YouTube : le lecteur se déduit de l'adresse, sans lire la page
+            probe.pop(host); _player_sites[host] = True
     for host, aid in probe.items():
         try:
             _players[aid] = find_player(rss.fetch(_article(aid)["url"], timeout=6, max_bytes=3_000_000).decode("utf-8", "replace"))
@@ -851,10 +855,19 @@ def videos(req, q, user):
             _players[aid] = None
         _player_sites[host] = bool(_players[aid])
     for a in items:
+        vid = rss.youtube_id(a.get("url"))
+        if vid:
+            _players[a["id"]] = f"https://www.youtube-nocookie.com/embed/{vid}"
         a["playable"] = _players.get(a["id"], _player_sites.get(urlparse(a.get("url") or "").hostname))
         a["playable"] = bool(a["playable"]) if a["playable"] is not None else None
-    items.sort(key=lambda a: {True: 0, None: 1, False: 2}[a["playable"]])
-    return {"items": items}
+    # Les chaînes alternent (une vidéo de chaque à tour de rôle) pour qu'aucune n'occupe tout le début du fil.
+    rank, seen = {}, {}
+    for a in items:
+        k = a.get("source_name")
+        rank[a["id"]] = seen.get((k, a["playable"]), 0)
+        seen[(k, a["playable"])] = rank[a["id"]] + 1
+    items.sort(key=lambda a: ({True: 0, None: 1, False: 2}[a["playable"]], rank[a["id"]]))
+    return {"items": items[:60]}
 
 
 @route("GET", r"/api/articles/(\d+)/player")
@@ -863,6 +876,9 @@ def article_player(req, q, user, aid):
     if a["media_type"] != "video" or not http_ok(a.get("url")):
         return {"embed": None}
     aid = int(aid)
+    vid = rss.youtube_id(a["url"])
+    if vid:
+        _players[aid] = f"https://www.youtube-nocookie.com/embed/{vid}"
     if aid not in _players:
         limit("player", req.ip, 30, 60)
         try:
@@ -1650,6 +1666,16 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v9'"):
+        # Chaînes YouTube officielles de médias (novembre 2026) : leurs vidéos se lisent dans Prisme.
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            if "youtube.com/feeds" in feed:
+                CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                                VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v9', '1')")
+        CONN.commit()
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v8'"):
         # Nasopresse (répertoire HACA des web TV), collecté par extraction de page (novembre 2026).
         seed.insert_scraped(CONN, {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")})

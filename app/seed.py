@@ -78,6 +78,12 @@ REAL_SOURCES = [
     ("Artici", "https://artici.info", "https://artici.info/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
     ("Le Point Sur", "https://www.lepointsur.com", "https://www.lepointsur.com/feed/", "Côte d'Ivoire", "fr", "web", None, 70, 0),
     ("Cacao Café News", "https://cacaocafenews.com", "https://cacaocafenews.com/index.php/feed/", "Côte d'Ivoire", "fr", "web", "economie", 70, 0),
+    # Chaînes YouTube officielles des médias (flux public de YouTube) : leurs vidéos se lisent dans Prisme.
+    ("France 24 — Vidéos", "https://www.youtube.com/@FRANCE24", "https://www.youtube.com/feeds/videos.xml?channel_id=UCCCPCZNChQdGa9EkATeye4g", "France", "fr", "tv", "international", 70, 0),
+    ("Franceinfo — Vidéos", "https://www.youtube.com/@franceinfo", "https://www.youtube.com/feeds/videos.xml?channel_id=UCO6K_kkdP-lnSCiO3tPx7WA", "France", "fr", "tv", None, 70, 0),
+    ("TV5Monde Info", "https://www.youtube.com/@TV5MONDEInfo", "https://www.youtube.com/feeds/videos.xml?channel_id=UCzKH70qfN_yuXq3s91fdwmg", "France", "fr", "tv", "international", 70, 0),
+    ("Africanews (français)", "https://www.youtube.com/@africanewsfr", "https://www.youtube.com/feeds/videos.xml?channel_id=UC25EuGAePOPvPrUA5cmu3dQ", "France", "fr", "tv", "international", 70, 0),
+    ("RTI Officiel", "https://www.youtube.com/channel/UCCihDvmcTRdmmV80wBznQOA", "https://www.youtube.com/feeds/videos.xml?channel_id=UCCihDvmcTRdmmV80wBznQOA", "Côte d'Ivoire", "fr", "tv", None, 70, 0),
 ]
 
 # Médias sans flux RSS, collectés par extraction de leur page d'accueil (app/scrape.py), dans le respect de robots.txt.
@@ -116,6 +122,9 @@ SOURCE_PROFILES = {
     "Jeune Afrique": "Magazine panafricain",
     "Franceinfo": "Service public d'information français",
     "Al Jazeera English": "Chaîne internationale financée par l'État du Qatar",
+    "TV5Monde Info": "Chaîne internationale francophone publique (France, Belgique, Suisse, Canada)",
+    "Africanews (français)": "Chaîne panafricaine d'information (groupe Euronews)",
+    "RTI Officiel": "Chaîne YouTube de la Radiodiffusion Télévision Ivoirienne (service public)",
     "01net": "Site spécialisé en technologie",
     "Numerama": "Site spécialisé en technologie",
     "AIP (Agence ivoirienne de presse)": "Agence de presse publique ivoirienne",

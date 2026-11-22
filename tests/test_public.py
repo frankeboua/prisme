@@ -399,10 +399,10 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 57)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 4 médias collectés par extraction
-        self.assertEqual(st["real_sources"], 34)
+        self.assertEqual(feeds, 62)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 4 médias collectés par extraction + 5 chaînes YouTube
+        self.assertEqual(st["real_sources"], 36)   # TV5Monde et Africanews ; les autres chaînes YouTube rejoignent leur média
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 19)
+        self.assertEqual(ivoirians, 20)
         self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 4)
 
 
@@ -1147,3 +1147,21 @@ class VideoPlayer(unittest.TestCase):
         csp = server._csp()
         self.assertIn("frame-src 'self' https://players.brightcove.net", csp)
         self.assertIn("https://www.youtube-nocookie.com", csp)
+
+    def test_youtube_channel_feed(self):
+        """Flux d'une chaîne YouTube : vidéo reconnue, miniature lue, lien vers YouTube seulement."""
+        xml = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+          xmlns:media="http://search.yahoo.com/mrss/"><entry><id>yt:video:w3QWf6Xfk1s</id><yt:videoId>w3QWf6Xfk1s</yt:videoId>
+          <title>Titre</title><link rel="alternate" href="https://www.youtube.com/watch?v=w3QWf6Xfk1s"/><published>2026-11-21T22:04:42+00:00</published>
+          <media:group><media:thumbnail url="https://i4.ytimg.com/vi/w3QWf6Xfk1s/hqdefault.jpg"/>
+          <media:description>Le texte utile.
+
+Abonnez-vous : https://f24.my/YTfr
+#tag</media:description></media:group></entry></feed>"""
+        it = server.rss.parse_feed(xml)[0]
+        self.assertEqual(it["image_url"], "https://i4.ytimg.com/vi/w3QWf6Xfk1s/hqdefault.jpg")
+        self.assertEqual(it["summary"], "Le texte utile.")
+        self.assertEqual(server.rss._media_type({"kind": "tv"}, it), "video")
+        self.assertEqual(server.rss.youtube_id("https://www.youtube.com/shorts/Jk99SlQlYAo"), "Jk99SlQlYAo")
+        self.assertIsNone(server.rss.youtube_id("https://evil.example/watch?v=w3QWf6Xfk1s"))
+        self.assertTrue(all("youtube.com/feeds/videos.xml?channel_id=UC" in s[2] for s in server.seed.REAL_SOURCES if "youtube" in s[2]))
