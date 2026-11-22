@@ -115,6 +115,8 @@ const P = {
   book: '<path d="M4 4h6a3 3 0 0 1 3 3v14a2 2 0 0 0-2-2H4z"/><path d="M20 4h-6a3 3 0 0 0-3 3v14a2 2 0 0 1 2-2h7z"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   play: '<path d="M7 4v16l13-8z"/>',
+  sound: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
+  mute: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>',
   repost: '<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>',
   users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-5-6.7"/>',
   social: '<path d="M21 12a8 8 0 0 1-11.8 7L3 21l2-6A8 8 0 1 1 21 12z"/>',
@@ -306,11 +308,39 @@ async function pageReposts() {
 //  Shorts : vidéos en plein écran, comme sur TikTok : on fait glisser, la vidéo démarre seule (sans son), on touche pour mettre en pause
 // ====================================================================
 const REEL = { obs: null, players: {}, active: null };
+// Son : choix retenu. Les navigateurs n'acceptent le son automatique qu'après un premier toucher sur la page.
+const reelLbl = (long, short, on) => `<i class="lbl-long">${long}</i><i class="lbl-short">${short}</i> : ${on ? "oui" : "non"}`;
+const reelSoundWanted = () => store.get("prisme_sound", false);
+const reelSoundNow = () => reelSoundWanted() && (!navigator.userActivation || navigator.userActivation.hasBeenActive);
+function reelSoundBtn() {
+  const b = $("#reelSoundBtn"), on = reelSoundWanted();
+  if (b) { b.setAttribute("aria-pressed", on); b.innerHTML = `${ico(on ? "sound" : "mute")}<span>${reelLbl("Son", "Son", on)}</span>`; }
+}
+function reelYT(fr, func, args = []) {
+  fr.contentWindow?.postMessage(JSON.stringify({ event: "command", func, args }), "*");
+}
+// Active ou coupe le son de la vidéo affichée (et des suivantes)
+function reelSetSound(on) {
+  store.set("prisme_sound", on);
+  reelSoundBtn();
+  const slide = REEL.active, fr = slide?.querySelector(".reel-video iframe");
+  slide?.querySelector(".reel-shield")?.remove();
+  if (fr) {
+    if (fr.src.includes("youtube")) { reelYT(fr, on ? "unMute" : "mute"); if (on) { reelYT(fr, "setVolume", [100]); reelYT(fr, "playVideo"); } }
+    else if (on) { slide.querySelector(".reel-video").innerHTML = slide.querySelector(".reel-video").dataset.cover; reelActivate(slide, true); return; }
+    if (!on) reelShield(slide);
+  } else if (slide && on) reelActivate(slide, true);
+}
+function reelShield(slide) {
+  const box = slide.querySelector(".reel-video");
+  if (box.querySelector("iframe") && !box.querySelector(".reel-shield"))
+    box.insertAdjacentHTML("beforeend", `<button class="reel-shield" aria-label="Activer le son"><span>${ico("mute")} Touchez pour le son</span></button>`);
+}
 const reelAuto = () => store.get("prisme_autoplay", !(navigator.connection && navigator.connection.saveData));
 function reelSetAuto(on) {
   store.set("prisme_autoplay", on);
   const b = $("#reelAutoBtn");
-  if (b) { b.setAttribute("aria-pressed", on); b.querySelector("span").textContent = on ? "Lecture auto : oui" : "Lecture auto : non"; }
+  if (b) { b.setAttribute("aria-pressed", on); b.querySelector("span").innerHTML = reelLbl("Lecture auto", "Auto", on); }
   toast(on ? "Les vidéos démarreront toutes seules, sans le son." : "Les vidéos ne démarreront plus toutes seules : touchez ▶ pour lancer.");
   if (REEL.active) reelActivate(REEL.active);
 }
@@ -340,11 +370,27 @@ async function reelActivate(slide, manual) {
   label.href = "#";
   if (!reelAuto() && !manual) return;
   if (box.querySelector("iframe")) return;
+  const sound = manual || reelSoundNow();
   const u = new URL(embed);
-  if (u.hostname.includes("brightcove")) { u.searchParams.set("autoplay", manual ? "true" : "muted"); if (!manual) u.searchParams.set("muted", "true"); }
-  else { u.searchParams.set("autoplay", "1"); if (!manual) u.searchParams.set("mute", "1"); u.searchParams.set("playsinline", "1"); }
-  box.innerHTML = `<iframe src="${esc(u.href)}" title="Vidéo : ${esc(slide.dataset.title)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  if (u.hostname.includes("brightcove")) { u.searchParams.set("autoplay", sound ? "true" : "muted"); if (!sound) u.searchParams.set("muted", "true"); }
+  else {
+    u.searchParams.set("autoplay", "1"); u.searchParams.set("playsinline", "1"); u.searchParams.set("enablejsapi", "1");
+    u.searchParams.set("origin", location.origin);
+    if (!sound) u.searchParams.set("mute", "1");
+  }
+  box.innerHTML = `<iframe src="${esc(u.href)}" title="Vidéo : ${esc(slide.dataset.title)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+  if (!sound) reelShield(slide);   // vidéo muette : un toucher n'importe où sur l'image active le son
 }
+// Ordinateur : flèches pour changer de vidéo, M pour le son
+function reelKeys(e) {
+  if (!document.body.classList.contains("reel-mode") || e.target.closest("input, textarea, select, .modal")) return;
+  const reel = $("#reel");
+  if (!reel) return;
+  if (e.key === "ArrowDown" || e.key === "PageDown") { e.preventDefault(); reel.scrollBy({ top: reel.clientHeight, behavior: "smooth" }); }
+  else if (e.key === "ArrowUp" || e.key === "PageUp") { e.preventDefault(); reel.scrollBy({ top: -reel.clientHeight, behavior: "smooth" }); }
+  else if (e.key === "m" || e.key === "M") { e.preventDefault(); reelSetSound(!reelSoundWanted()); }
+}
+document.addEventListener("keydown", reelKeys);
 async function pageReel() {
   document.body.classList.add("reel-mode");
   main().innerHTML = `<div class="reel" id="reel"><div class="reel-loading">${ico("video")} Chargement des vidéos…</div></div>`;
@@ -355,7 +401,8 @@ async function pageReel() {
     <div class="reel-bar">
       <a class="reel-btn" href="/multimedia" aria-label="Quitter le plein écran">${ico("x")}</a>
       <b>Shorts</b>
-      <button class="reel-btn wide" id="reelAutoBtn" data-act="reelauto" aria-pressed="${on}">${ico("play")}<span>${on ? "Lecture auto : oui" : "Lecture auto : non"}</span></button>
+      <button class="reel-btn wide" id="reelSoundBtn" data-act="reelsound" aria-pressed="${reelSoundWanted()}">${ico(reelSoundWanted() ? "sound" : "mute")}<span>${reelLbl("Son", "Son", reelSoundWanted())}</span></button>
+      <button class="reel-btn wide" id="reelAutoBtn" data-act="reelauto" aria-pressed="${on}">${ico("play")}<span>${reelLbl("Lecture auto", "Auto", on)}</span></button>
     </div>
     ${r.items.length ? r.items.map((a, i) => {
       const cover = `${picture(a, true)}<span class="reel-tap">${ico("play")}</span>`;
@@ -380,6 +427,10 @@ async function pageReel() {
   reel.onclick = (e) => {
     const slide = e.target.closest(".reel-slide");
     if (!slide || slide.classList.contains("reel-end")) return;
+    // Écran difficile à viser : toucher le cache ou le fond flou de la vidéo active le son
+    if (e.target.closest(".reel-shield") || (e.target.closest(".reel-bg") && slide.querySelector(".reel-shield"))) {
+      e.preventDefault(); REEL.active = slide; reelSetSound(true); return;
+    }
     if (e.target.closest(".reel-tap") || e.target.closest("[data-reelgo]")) {
       const go = slide.querySelector(".reel-go");
       if (go.target === "_blank") return;   // pas de lecteur intégrable : le lien s'ouvre chez le média
@@ -1716,6 +1767,7 @@ document.addEventListener("click", async (e) => {
       case "repost": prevent(); await openRepost(id); break;
       case "unrepost": prevent(); await del(`/api/articles/${id}/repost`); closeModal(); toast("Republication retirée."); if (location.pathname.startsWith("/article/") || location.pathname.startsWith("/republications")) route(); break;
       case "reelauto": prevent(); reelSetAuto(!reelAuto()); break;
+      case "reelsound": prevent(); reelSetSound(!reelSoundWanted()); break;
       case "reelsound": prevent(); toast("Touchez la vidéo puis l'icône du haut-parleur pour activer le son."); break;
       case "closeplayer": $("#player").hidden = true; $("#player").innerHTML = ""; break;
       case "tool": tool(el.dataset.tool); break;

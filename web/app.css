@@ -713,3 +713,18 @@ body.reel-mode .to-top, body.reel-mode .site-foot { display: none !important; }
 .reel-end p { color: #ccc; }
 @media (min-width: 900px) { .reel-info { right: auto; width: min(640px, 60%); } .reel-side { right: 28px; bottom: 50%; translate: 0 50%; } }
 @media (prefers-reduced-motion: reduce) { .reel-hint { animation: none; } }
+
+/* Shorts : son. Un grand cache transparent sur la vidéo muette : un toucher n'importe où active le son */
+.reel-shield { position: absolute; inset: 0; z-index: 2; border: 0; padding: 0; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.reel-shield span { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 999px; background: rgba(0, 0, 0, .82); border: 1px solid rgba(255, 255, 255, .35); color: #fff; font-weight: 700; font-size: .9rem;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .35); animation: reelPulse 2s ease-in-out infinite; }
+.reel-shield svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+.reel-shield:focus-visible span { outline: 3px solid #fff; outline-offset: 2px; }
+@keyframes reelPulse { 50% { transform: scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .reel-shield span { animation: none; } }
+.reel-bg { cursor: pointer; }
+@media (max-width: 460px) { .reel-btn.wide span { font-size: .8rem; } .reel-bar { gap: 8px; } .reel-bar b { font-size: 1.1rem; } }
+.reel-btn span { white-space: nowrap; }
+.reel-btn span i { font-style: normal; }
+.reel-btn .lbl-short { display: none; }
+@media (max-width: 460px) { .reel-btn .lbl-long { display: none; } .reel-btn .lbl-short { display: inline; } }
