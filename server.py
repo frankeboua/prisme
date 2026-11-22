@@ -1667,6 +1667,16 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v11'"):
+        # Religion : rubriques ivoiriennes et médias de chaque confession (22 novembre 2026).
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            if dcat == "religion":
+                CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                                VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v11', '1')")
+        CONN.commit()
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v10'"):
         # Plus de médias ivoiriens dans plus de domaines (22 novembre 2026) ; les chaînes YouTube de la v9 sont incluses.
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}

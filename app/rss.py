@@ -160,6 +160,10 @@ def store(conn, src, items, slug_ids):
             continue
         # Le même article peut figurer dans plusieurs flux d'un média : il n'est gardé qu'une fois.
         if it["url"] and conn.execute("SELECT 1 FROM articles WHERE url=?", (it["url"],)).fetchone():
+            if src.get("default_category") and src.get("publisher"):
+                # Déjà reçu par le flux général du même média : sa rubrique (Santé, Religion…) donne la bonne catégorie.
+                conn.execute("""UPDATE articles SET category_id=? WHERE url=? AND source_id IN (SELECT id FROM sources WHERE publisher=?)""",
+                             (src["default_category"], it["url"], src["publisher"]))
             continue
         guid = hashlib.sha1(f"{src['id']}|{it['guid'] or it['url'] or it['title']}".encode()).hexdigest()
         body = nlp.strip_html(it["content"] or it["summary"])
