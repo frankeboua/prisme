@@ -399,10 +399,10 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 62)                # 47 + 6 flux RSS de l'annuaire ANP/HACA + 4 médias collectés par extraction + 5 chaînes YouTube
-        self.assertEqual(st["real_sources"], 36)   # TV5Monde et Africanews ; les autres chaînes YouTube rejoignent leur média
+        self.assertEqual(feeds, 82)                # 47 + 6 flux ANP/HACA + 4 par extraction + 5 chaînes YouTube + 20 flux ivoiriens (22/11/2026)
+        self.assertEqual(st["real_sources"], 41)   # + TV5Monde, Africanews, Sport-Ivoire, Afrik Soir, 100pour100culture, Abidjan.net TV, Life TV ; les rubriques rejoignent leur média
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 20)
+        self.assertEqual(ivoirians, 40)
         self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 4)
 
 

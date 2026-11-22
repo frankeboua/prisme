@@ -838,7 +838,7 @@ def find_player(html):
 @route("GET", "/api/videos")
 def videos(req, q, user):
     """Vidéos récentes ; celles des médias qui fournissent un lecteur intégrable passent en premier."""
-    items = engine.feed(CONN, user, "recent", None, "video", None, 100, 0)["items"]
+    items = engine.feed(CONN, user, "recent", None, "video", None, 200, 0)["items"]
     probe = {}
     for a in items:   # une vidéo par site encore inconnu suffit pour savoir s'il fournit un lecteur
         host = urlparse(a.get("url") or "").hostname
@@ -866,7 +866,8 @@ def videos(req, q, user):
         k = a.get("source_name")
         rank[a["id"]] = seen.get((k, a["playable"]), 0)
         seen[(k, a["playable"])] = rank[a["id"]] + 1
-    items.sort(key=lambda a: ({True: 0, None: 1, False: 2}[a["playable"]], rank[a["id"]]))
+    # À chaque tour, les chaînes ivoiriennes passent en premier.
+    items.sort(key=lambda a: ({True: 0, None: 1, False: 2}[a["playable"]], rank[a["id"]], a.get("source_country") != "Côte d'Ivoire"))
     return {"items": items[:60]}
 
 
@@ -1666,6 +1667,16 @@ def bootstrap():
             CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
                             VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
         CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v2', '1')")
+    if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v10'"):
+        # Plus de médias ivoiriens dans plus de domaines (22 novembre 2026) ; les chaînes YouTube de la v9 sont incluses.
+        cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}
+        for name, site, feed, country, lang, kind, dcat, _rel, _cert in seed.REAL_SOURCES:
+            if country == "Côte d'Ivoire" or "youtube.com/feeds" in feed:
+                CONN.execute("""INSERT OR IGNORE INTO sources(name, website, feed_url, country, language, kind, default_category, reliability, certified)
+                                VALUES (?,?,?,?,?,?,?,70,0)""", (name, site, feed, country, lang, kind, cats.get(dcat)))
+        db.fill_publishers(CONN)
+        CONN.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sources_v10', '1')")
+        CONN.commit()
     if not db.scalar(CONN, "SELECT 1 FROM meta WHERE key='sources_v9'"):
         # Chaînes YouTube officielles de médias (novembre 2026) : leurs vidéos se lisent dans Prisme.
         cats = {r["slug"]: r["id"] for r in db.rows(CONN, "SELECT id, slug FROM categories")}

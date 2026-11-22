@@ -103,7 +103,10 @@ def fill_publishers(conn):
                                                         WHEN name LIKE 'Radio France%' THEN 'Radio France' WHEN name LIKE 'France 24%' THEN 'France 24'
                                                         WHEN name LIKE 'RFI%' THEN 'RFI' WHEN name LIKE 'Franceinfo%' THEN 'Franceinfo'
                                                         WHEN name LIKE 'Libération%' THEN 'Libération'
-                                                        WHEN name = 'RTI Officiel' THEN 'RTI Info' ELSE name END
+                                                        WHEN name = 'RTI Officiel' THEN 'RTI Info'
+                                                        WHEN name LIKE 'AIP %' THEN 'AIP (Agence ivoirienne de presse)' WHEN name LIKE 'Afrique Matin%' THEN 'Afrique Matin'
+                                                        WHEN name LIKE 'Artici%' THEN 'Artici' WHEN name LIKE 'Justeinfos%' THEN 'Justeinfos'
+                                                        WHEN name LIKE 'Afrik Soir%' THEN 'Afrik Soir' WHEN name LIKE '7info%' THEN '7info' ELSE name END
                     WHERE publisher IS NULL""")
 
 
