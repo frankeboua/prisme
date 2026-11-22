@@ -399,12 +399,12 @@ class Publishers(Case):
         server._anon_cache.clear()
         st = call(server, "GET", "/api/stats")[2]
         feeds = db.scalar(CONN, "SELECT COUNT(*) FROM sources")
-        self.assertEqual(feeds, 94)                # 47 + 6 flux ANP/HACA + 4 par extraction + 5 chaînes YouTube + 20 flux ivoiriens + 12 flux religieux (22/11/2026)
-        # Éditeurs ajoutés : TV5Monde, Africanews, Sport-Ivoire, Afrik Soir, 100pour100culture, Abidjan.net TV, Life TV, puis 7 médias religieux ;
+        self.assertEqual(feeds, 95)                # 47 + 6 flux ANP/HACA + 4 par extraction + 5 chaînes YouTube + 20 flux ivoiriens + 13 flux religieux (22/11/2026)
+        # Éditeurs ajoutés : TV5Monde, Africanews, Sport-Ivoire, Afrik Soir, 100pour100culture, Abidjan.net TV, Life TV, puis 8 médias religieux ;
         # les rubriques et les chaînes YouTube d'un média déjà suivi comptent avec lui.
-        self.assertEqual(st["real_sources"], 48)
+        self.assertEqual(st["real_sources"], 49)
         ivoirians = db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE country='Côte d''Ivoire' AND is_demo=0")
-        self.assertEqual(ivoirians, 44)
+        self.assertEqual(ivoirians, 45)
         self.assertEqual(db.scalar(CONN, "SELECT COUNT(*) FROM sources WHERE fetch_method='scrape'"), 4)
 
 
@@ -948,10 +948,10 @@ class VerdictsEtReligion(unittest.TestCase):
         faiths = {r["name"] for r in db.rows(CONN, "SELECT s.name FROM sources s JOIN categories c ON c.id=s.default_category WHERE c.slug='religion'")}
         # Plusieurs confessions, sans hiérarchie : catholique, protestante, évangélique, musulmane, bouddhiste, bahá'íe, et des rubriques ivoiriennes
         self.assertLessEqual({"Vatican News", "La Croix", "ACI Afrique", "Réforme", "Regards protestants", "Christianisme Aujourd'hui",
-                              "Saphirnews", "Oumma", "Buddha Channel", "Bahá'í de France", "Le Monde Religions"}, faiths)
+                              "Ecclesia TV", "Saphirnews", "Oumma", "Buddha Channel", "Bahá'í de France", "Le Monde Religions"}, faiths)
         ci = db.scalar(CONN, """SELECT COUNT(*) FROM sources s JOIN categories c ON c.id=s.default_category
                                 WHERE c.slug='religion' AND s.country='Côte d''Ivoire'""")
-        self.assertEqual(ci, 4)
+        self.assertEqual(ci, 5)
         self.assertEqual(call(server, "GET", "/rubrique/religion")[0], 200)
 
 
